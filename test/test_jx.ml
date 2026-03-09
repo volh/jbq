@@ -456,6 +456,47 @@ let test_infinite_where_skip_take () =
     "infinite multiples of 7 skipping first 5" "[35,42,49]"
     (eval_str "range | where (. % 7 == 0) | skip 5 | take 3" "null")
 
+let test_flatmap_basic () =
+  Alcotest.(check string)
+    "flatmap flattens mapped arrays"
+    {|[1,2,3,4]|}
+    (eval_str "flatmap .items"
+       {|[{"items":[1,2]},{"items":[3,4]}]|})
+
+let test_flatmap_nested_drill () =
+  Alcotest.(check string)
+    "flatmap drills through nested arrays"
+    {|["W","G","D"]|}
+    (eval_str "flatmap .orders | flatmap .items | map .name"
+       {|[{"orders":[{"items":[{"name":"W"},{"name":"G"}]}]},{"orders":[{"items":[{"name":"D"}]}]}]|})
+
+let test_flatmap_with_where () =
+  Alcotest.(check string)
+    "flatmap composes with where"
+    {|[3,4]|}
+    (eval_str "flatmap .items | where (. > 2)"
+       {|[{"items":[1,2]},{"items":[3,4]}]|})
+
+let test_flatmap_with_take () =
+  Alcotest.(check string)
+    "flatmap composes with take for early exit"
+    {|[1,2]|}
+    (eval_str "flatmap .items | take 2"
+       {|[{"items":[1,2]},{"items":[3,4]}]|})
+
+let test_flatmap_with_lambda () =
+  Alcotest.(check string)
+    "flatmap with lambda"
+    {|[1,1,2,2]|}
+    (eval_str "flatmap (x => [x, x])" "[1,2]")
+
+let test_flatmap_stream () =
+  Alcotest.(check string)
+    "flatmap over streamed input"
+    {|[1,2,3,4]|}
+    (eval_stream_str "flatmap .items"
+       {|[{"items":[1,2]},{"items":[3,4]}]|})
+
 let test_lazy_preserves_array_semantics () =
   Alcotest.(check string)
     "array input still returns array" "[2,4]"
@@ -497,6 +538,7 @@ let () =
           Alcotest.test_case "stream first" `Quick test_simdjson_stream_first;
           Alcotest.test_case "stream last" `Quick test_simdjson_stream_last;
           Alcotest.test_case "stream where map count" `Quick test_simdjson_stream_where_map_count;
+          Alcotest.test_case "stream flatmap" `Quick test_flatmap_stream;
         ] );
       ( "core",
         [
@@ -542,6 +584,11 @@ let () =
           Alcotest.test_case "spaced postfix rejected" `Quick test_spaced_postfix_rejected;
           Alcotest.test_case "unique" `Quick test_unique;
           Alcotest.test_case "unique objects" `Quick test_unique_objects;
+          Alcotest.test_case "flatmap" `Quick test_flatmap_basic;
+          Alcotest.test_case "flatmap nested drill" `Quick test_flatmap_nested_drill;
+          Alcotest.test_case "flatmap with where" `Quick test_flatmap_with_where;
+          Alcotest.test_case "flatmap with take" `Quick test_flatmap_with_take;
+          Alcotest.test_case "flatmap with lambda" `Quick test_flatmap_with_lambda;
           Alcotest.test_case "take" `Quick test_take;
           Alcotest.test_case "skip" `Quick test_skip;
           Alcotest.test_case "count" `Quick test_count;

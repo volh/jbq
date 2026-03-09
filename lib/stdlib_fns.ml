@@ -59,22 +59,53 @@ let realize_input input =
   | Value.Seq s -> Value.Array (List.of_seq s)
   | v -> v
 
+let all_fn_names =
+  [
+    "where"; "map"; "flatmap"; "sort_by"; "group_by"; "unique"; "flatten"; "reverse";
+    "first"; "last"; "take"; "skip"; "count"; "length";
+    "sum"; "min"; "max"; "avg";
+    "lower"; "upper"; "trim"; "truncate"; "split"; "join";
+    "keys"; "values"; "pick"; "omit";
+    "type"; "to_string"; "to_number";
+    "range";
+  ]
+
+let raise_unknown name loc =
+  let suggestion = Interpreter.find_closest name all_fn_names in
+  Error.raise_ ~loc
+    ?suggestion:
+      (match suggestion with
+      | Some s -> Some (Printf.sprintf "did you mean %s?" s)
+      | None ->
+        Some
+          (Printf.sprintf "available functions: %s"
+             (String.concat ", " all_fn_names)))
+    Unknown_function
+    (Printf.sprintf "unknown function: %s" name)
+
+let eval_per_item env expr item =
+  match expr with
+  | Lambda { param; body; _ } -> eval_in_ctx ((param, item) :: env) item body
+  | _ -> eval_in_ctx env item expr
+
 let dispatch env input name args loc =
   match (name, args) with
   (* === Transducible collection functions === *)
   | "where", [ pred ] ->
     require_collection "where" input loc;
     let xd = Transducer.filter
-      (fun item -> Value.is_truthy (eval_in_ctx env item pred)) in
+      (fun item -> Value.is_truthy (eval_per_item env pred item)) in
     xd_compose input xd
   | "map", [ expr ] ->
     require_collection "map" input loc;
-    let xd = Transducer.map
-      (fun item -> eval_in_ctx env item expr) in
+    let xd = Transducer.map (eval_per_item env expr) in
     xd_compose input xd
   | "unique", [] ->
     require_collection "unique" input loc;
     xd_compose input (Transducer.unique unique_key_of_value)
+  | "flatmap", [ expr ] ->
+    require_collection "flatmap" input loc;
+    xd_compose input (Transducer.flatmap (eval_per_item env expr))
   | "flatten", [] ->
     require_collection "flatten" input loc;
     xd_compose input Transducer.flatten
@@ -100,7 +131,7 @@ let dispatch env input name args loc =
     require_collection "sort_by" input loc;
     let xs = Value.to_list_exn (realize_input input) in
     let sorted =
-      List.map (fun item -> (eval_in_ctx env item expr, item)) xs
+      List.map (fun item -> (eval_per_item env expr item, item)) xs
       |> List.sort (fun (key_a, _) (key_b, _) ->
            Interpreter.value_compare key_a key_b)
       |> List.map snd
@@ -113,7 +144,7 @@ let dispatch env input name args loc =
     let order = ref [] in
     List.iter
       (fun item ->
-        let key = eval_in_ctx env item expr in
+        let key = eval_per_item env expr item in
         let key_str = Interpreter.value_to_string key in
         match Hashtbl.find_opt groups key_str with
         | Some rev_items -> Hashtbl.replace groups key_str (item :: rev_items)
@@ -151,16 +182,7 @@ let dispatch env input name args loc =
     (match xs with
     | [] -> Error.raise_ ~loc Runtime_error "last on empty collection"
     | _ -> List.nth xs (List.length xs - 1))
-  | "count", [] -> (
-    match input with
-    | Value.Array xs -> Value.Int (List.length xs)
-    | Value.Xd _ -> Value.Int (fold_collection (fun n _ -> n + 1) 0 input)
-    | Value.Seq s -> Value.Int (Seq.fold_left (fun acc _ -> acc + 1) 0 s)
-    | Value.Object kvs -> Value.Int (List.length kvs)
-    | Value.String s -> Value.Int (String.length s)
-    | Value.Null -> Value.Int 0
-    | _ -> Value.Int 1)
-  | "length", [] -> (
+  | ("count" | "length"), [] -> (
     match input with
     | Value.Array xs -> Value.Int (List.length xs)
     | Value.Xd _ -> Value.Int (fold_collection (fun n _ -> n + 1) 0 input)
@@ -401,26 +423,9 @@ let dispatch env input name args loc =
         (List.init (end_val - start_val) (fun i -> Value.Int (start_val + i)))
     | _ -> Error.raise_ ~loc Arity_mismatch "range takes 0-2 arguments")
 
+  | _, [] -> (
+    match List.assoc_opt name env with
+    | Some v -> v
+    | None -> raise_unknown name loc)
   | _ ->
-    let all_fns =
-      [
-        "where"; "map"; "sort_by"; "group_by"; "unique"; "flatten"; "reverse";
-        "first"; "last"; "take"; "skip"; "count"; "length";
-        "sum"; "min"; "max"; "avg";
-        "lower"; "upper"; "trim"; "truncate"; "split"; "join";
-        "keys"; "values"; "pick"; "omit";
-        "type"; "to_string"; "to_number";
-        "range";
-      ]
-    in
-    let suggestion = Interpreter.find_closest name all_fns in
-    Error.raise_ ~loc
-      ?suggestion:
-        (match suggestion with
-        | Some s -> Some (Printf.sprintf "did you mean %s?" s)
-        | None ->
-          Some
-            (Printf.sprintf "available functions: %s"
-               (String.concat ", " all_fns)))
-      Unknown_function
-      (Printf.sprintf "unknown function: %s" name)
+    raise_unknown name loc

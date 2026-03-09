@@ -14,7 +14,7 @@ let time label f =
   else f ()
 
 let streamable_root_fn = function
-  | "where" | "map" | "unique" | "flatten" | "take" | "skip"
+  | "where" | "map" | "flatmap" | "unique" | "flatten" | "take" | "skip"
   | "sort_by" | "group_by" | "reverse" | "first" | "last"
   | "count" | "length" | "sum" | "min" | "max" | "avg" ->
     true

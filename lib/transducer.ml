@@ -95,3 +95,5 @@ let flatten : xd =
              | Xd_continue -> go acc' rest)
         in
         go acc items) }
+
+let flatmap f : xd = compose (map f) flatten
