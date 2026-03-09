@@ -29,7 +29,7 @@ let rec supports_simdjson_top_array_path (expr : Jx.Ast.expr) =
     && supports_simdjson_top_array_path right
   | _ -> false
 
-let run query_str input_source raw_output compact =
+let run query_str input_source raw_output compact schema sample =
   try
     let ast = time "parse query" (fun () -> Jx.Parser.parse query_str) in
     let json_str =
@@ -62,16 +62,31 @@ let run query_str input_source raw_output compact =
         time "simdjson parse" (fun () -> Jx.Simdjson_native.parse_value json_str)
     in
     let result = time "eval pipeline" (fun () -> Jx.Interpreter.eval [] input ast) in
-    let output =
-      time "output" (fun () ->
-        match (raw_output, result) with
-        | true, Jx.Value.String s -> s
-        | _ -> Jx.Printer.to_json ~compact result)
-    in
-    time "print" (fun () ->
-      print_string output;
-      print_newline ());
-    0
+    if schema then (
+      let s =
+        time "infer schema" (fun () ->
+          if sample > 0 then Jx.Schema.infer_sampled ~n:sample result
+          else Jx.Schema.infer result)
+      in
+      let schema_val = Jx.Schema.to_value s |> Jx.Schema.add_schema_id in
+      let output =
+        time "output" (fun () -> Jx.Printer.to_json ~compact schema_val)
+      in
+      time "print" (fun () ->
+        print_string output;
+        print_newline ());
+      0)
+    else
+      let output =
+        time "output" (fun () ->
+          match (raw_output, result) with
+          | true, Jx.Value.String s -> s
+          | _ -> Jx.Printer.to_json ~compact result)
+      in
+      time "print" (fun () ->
+        print_string output;
+        print_newline ());
+      0
   with
   | Jx.Error.Jx_error err ->
     Printf.eprintf "%s%!" (Jx.Error.format_error err query_str);
@@ -106,10 +121,20 @@ let compact =
   let doc = "Compact output (no pretty-printing)." in
   Arg.(value & flag & info [ "c"; "compact" ] ~doc)
 
+let schema =
+  let doc = "Output JSON Schema inferred from the data." in
+  Arg.(value & flag & info [ "schema" ] ~doc)
+
+let sample =
+  let doc =
+    "Limit schema inference to first N array elements (default: scan all)."
+  in
+  Arg.(value & opt int 0 & info [ "n" ] ~docv:"N" ~doc)
+
 let cmd =
   let doc = "A better query language for JSON" in
   let info = Cmd.info "jx" ~version:"0.1.0" ~doc in
   Cmd.v info
-    Term.(const run $ query $ input_file $ raw_output $ compact)
+    Term.(const run $ query $ input_file $ raw_output $ compact $ schema $ sample)
 
 let () = exit (Cmd.eval' cmd)
