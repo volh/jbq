@@ -170,6 +170,66 @@ let test_negative_index () =
 let test_slice () =
   Alcotest.(check string) "slice" "[2,3]" (eval_str ".[1:3]" "[1,2,3,4]")
 
+(* === Lazy sequence tests === *)
+
+let test_infinite_range_take () =
+  Alcotest.(check string)
+    "infinite range | take" "[0,1,2,3,4]"
+    (eval_str "range | take 5" "null")
+
+let test_infinite_range_where_take () =
+  Alcotest.(check string)
+    "infinite range | where | take" "[11,12,13,14,15]"
+    (eval_str "range | where (. > 10) | take 5" "null")
+
+let test_infinite_map_where_take () =
+  Alcotest.(check string)
+    "infinite range | map | where | take" "[64,81,100]"
+    (eval_str "range | map (. * .) | where (. > 50) | take 3" "null")
+
+let test_infinite_skip_take () =
+  Alcotest.(check string)
+    "infinite range | skip | take" "[5,6,7]"
+    (eval_str "range | skip 5 | take 3" "null")
+
+let test_infinite_first () =
+  Alcotest.(check string)
+    "infinite range | where | first" "0"
+    (eval_str "range | where (. % 2 == 0) | first" "null")
+
+let test_infinite_sum () =
+  Alcotest.(check string)
+    "infinite range | take | sum" "10"
+    (eval_str "range | take 5 | sum" "null")
+
+let test_infinite_count () =
+  Alcotest.(check string)
+    "infinite range | take | count" "100"
+    (eval_str "range | take 100 | count" "null")
+
+let test_infinite_where_skip_take () =
+  Alcotest.(check string)
+    "infinite multiples of 7 skipping first 5" "[35,42,49]"
+    (eval_str "range | where (. % 7 == 0) | skip 5 | take 3" "null")
+
+let test_lazy_preserves_array_semantics () =
+  Alcotest.(check string)
+    "array input still returns array" "[2,4]"
+    (eval_str "where (. % 2 == 0)" "[1,2,3,4,5]")
+
+let test_infinite_map_interpolation () =
+  Alcotest.(check string)
+    "infinite range with string interpolation"
+    {|["n=0","n=1","n=2"]|}
+    (eval_str {|range | map "n=${.}" | take 3|} "null")
+
+let test_lazy_no_realization () =
+  (* Proves laziness: this would hang or OOM if realized eagerly *)
+  Alcotest.(check bool)
+    "infinite pipeline completes (proves laziness)" true
+    (let result = eval_str "range | where (. > 1000000) | take 1" "null" in
+     result = "[1000001]")
+
 let () =
   Alcotest.run "jx"
     [
@@ -223,5 +283,19 @@ let () =
         [
           Alcotest.test_case "optional field" `Quick test_optional_field;
           Alcotest.test_case "strict null" `Quick test_strict_null;
+        ] );
+      ( "lazy sequences",
+        [
+          Alcotest.test_case "infinite range | take" `Quick test_infinite_range_take;
+          Alcotest.test_case "infinite range | where | take" `Quick test_infinite_range_where_take;
+          Alcotest.test_case "infinite map | where | take" `Quick test_infinite_map_where_take;
+          Alcotest.test_case "infinite skip | take" `Quick test_infinite_skip_take;
+          Alcotest.test_case "infinite first" `Quick test_infinite_first;
+          Alcotest.test_case "infinite sum" `Quick test_infinite_sum;
+          Alcotest.test_case "infinite count" `Quick test_infinite_count;
+          Alcotest.test_case "infinite where | skip | take" `Quick test_infinite_where_skip_take;
+          Alcotest.test_case "array semantics preserved" `Quick test_lazy_preserves_array_semantics;
+          Alcotest.test_case "map with interpolation" `Quick test_infinite_map_interpolation;
+          Alcotest.test_case "laziness proof (1M skip)" `Quick test_lazy_no_realization;
         ] );
     ]

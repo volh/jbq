@@ -2,134 +2,139 @@ open Ast
 
 let eval_in_ctx env input expr = Interpreter.eval env input expr
 
-let as_list input =
-  match input with
-  | Value.Array xs -> xs
-  | Value.Seq s -> List.of_seq s
-  | _ -> [ input ]
+let require_collection name input loc =
+  if not (Value.is_collection input) then
+    Error.raise_ ~loc Type_mismatch
+      (Printf.sprintf "%s requires array or sequence, got %s" name
+         (Value.type_name input))
 
-let implicit_iter input f =
-  (* Implicit iteration: when input is an array, iterate over elements *)
+let as_seq input =
   match input with
-  | Value.Array xs -> Value.Array (f xs)
-  | Value.Seq s -> Value.Array (f (List.of_seq s))
-  | _ -> Error.raise_ Type_mismatch
-           (Printf.sprintf "expected array, got %s" (Value.type_name input))
+  | Value.Array xs -> List.to_seq xs
+  | Value.Seq s -> s
+  | _ -> Seq.return input
+
+let wrap_result input seq =
+  if Value.is_seq input then Value.Seq seq
+  else Value.Array (List.of_seq seq)
 
 let dispatch env input name args loc =
   match (name, args) with
   (* === Collection functions === *)
   | "where", [ pred ] ->
-    implicit_iter input (fun xs ->
-        List.filter (fun item -> Value.is_truthy (eval_in_ctx env item pred)) xs)
-  | "map", [ expr ] ->
-    implicit_iter input (fun xs ->
-        List.map (fun item -> eval_in_ctx env item expr) xs)
-  | "sort_by", [ expr ] ->
-    implicit_iter input (fun xs ->
-        List.sort
-          (fun a b ->
-            Interpreter.value_compare
-              (eval_in_ctx env a expr)
-              (eval_in_ctx env b expr))
-          xs)
-  | "group_by", [ expr ] ->
-    let xs =
-      match input with
-      | Value.Array xs -> xs
-      | Value.Seq s -> List.of_seq s
-      | _ ->
-        Error.raise_ ~loc Type_mismatch
-          (Printf.sprintf "group_by requires array, got %s"
-             (Value.type_name input))
+    require_collection "where" input loc;
+    let s = Value.to_seq input in
+    let filtered =
+      Seq.filter (fun item -> Value.is_truthy (eval_in_ctx env item pred)) s
     in
+    wrap_result input filtered
+  | "map", [ expr ] ->
+    require_collection "map" input loc;
+    let s = Value.to_seq input in
+    let mapped = Seq.map (fun item -> eval_in_ctx env item expr) s in
+    wrap_result input mapped
+  | "sort_by", [ expr ] ->
+    require_collection "sort_by" input loc;
+    let xs = List.of_seq (Value.to_seq input) in
+    let sorted =
+      List.sort
+        (fun a b ->
+          Interpreter.value_compare
+            (eval_in_ctx env a expr)
+            (eval_in_ctx env b expr))
+        xs
+    in
+    Value.Array sorted
+  | "group_by", [ expr ] ->
+    require_collection "group_by" input loc;
+    let s = Value.to_seq input in
     let groups = Hashtbl.create 16 in
     let order = ref [] in
-    List.iter
+    Seq.iter
       (fun item ->
         let key = eval_in_ctx env item expr in
         let key_str = Interpreter.value_to_string key in
-        if not (Hashtbl.mem groups key_str) then
-          order := key_str :: !order;
+        if not (Hashtbl.mem groups key_str) then order := key_str :: !order;
         let existing =
           match Hashtbl.find_opt groups key_str with
           | Some xs -> xs
           | None -> []
         in
         Hashtbl.replace groups key_str (existing @ [ item ]))
-      xs;
+      s;
     Value.Object
       (List.rev !order
       |> List.map (fun k -> (k, Value.Array (Hashtbl.find groups k))))
   | "unique", [] ->
-    implicit_iter input (fun xs ->
-        let seen = Hashtbl.create 16 in
-        List.filter
-          (fun item ->
-            let s = Yojson.Basic.to_string (Value.to_yojson item) in
-            if Hashtbl.mem seen s then false
-            else (
-              Hashtbl.replace seen s ();
-              true))
-          xs)
+    require_collection "unique" input loc;
+    let s = Value.to_seq input in
+    let seen = Hashtbl.create 16 in
+    let filtered =
+      Seq.filter
+        (fun item ->
+          let s = Yojson.Basic.to_string (Value.to_yojson item) in
+          if Hashtbl.mem seen s then false
+          else (
+            Hashtbl.replace seen s ();
+            true))
+        s
+    in
+    wrap_result input filtered
   | "flatten", [] ->
-    implicit_iter input (fun xs ->
-        List.concat_map
-          (fun item ->
-            match item with Value.Array inner -> inner | _ -> [ item ])
-          xs)
+    require_collection "flatten" input loc;
+    let s = Value.to_seq input in
+    let flattened =
+      Seq.flat_map
+        (fun item ->
+          match item with
+          | Value.Array inner -> List.to_seq inner
+          | Value.Seq inner -> inner
+          | _ -> Seq.return item)
+        s
+    in
+    wrap_result input flattened
   | "reverse", [] ->
-    implicit_iter input (fun xs -> List.rev xs)
+    require_collection "reverse" input loc;
+    let xs = List.of_seq (Value.to_seq input) in
+    Value.Array (List.rev xs)
 
   (* === Slicing === *)
   | "first", [] -> (
-    match input with
-    | Value.Array (x :: _) -> x
-    | Value.Array [] ->
-      Error.raise_ ~loc Runtime_error "first on empty array"
-    | _ ->
-      Error.raise_ ~loc Type_mismatch
-        (Printf.sprintf "first requires array, got %s"
-           (Value.type_name input)))
-  | "last", [] -> (
-    match input with
-    | Value.Array xs when List.length xs > 0 ->
-      List.nth xs (List.length xs - 1)
-    | Value.Array [] ->
-      Error.raise_ ~loc Runtime_error "last on empty array"
-    | _ ->
-      Error.raise_ ~loc Type_mismatch
-        (Printf.sprintf "last requires array, got %s"
-           (Value.type_name input)))
-  | "take", [ n_expr ] -> (
+    require_collection "first" input loc;
+    let s = Value.to_seq input in
+    match s () with
+    | Seq.Cons (x, _) -> x
+    | Seq.Nil -> Error.raise_ ~loc Runtime_error "first on empty collection")
+  | "last", [] ->
+    require_collection "last" input loc;
+    let xs = List.of_seq (Value.to_seq input) in
+    (match xs with
+    | [] -> Error.raise_ ~loc Runtime_error "last on empty collection"
+    | _ -> List.nth xs (List.length xs - 1))
+  | "take", [ n_expr ] ->
     let n =
       match eval_in_ctx env input n_expr with
       | Value.Int n -> n
       | _ -> Error.raise_ ~loc Type_mismatch "take requires integer argument"
     in
-    match input with
-    | Value.Array xs ->
-      Value.Array (List.to_seq xs |> Seq.take n |> List.of_seq)
-    | _ ->
-      Error.raise_ ~loc Type_mismatch
-        (Printf.sprintf "take requires array, got %s"
-           (Value.type_name input)))
-  | "skip", [ n_expr ] -> (
+    require_collection "take" input loc;
+    let s = Value.to_seq input in
+    let taken = Seq.take n s in
+    wrap_result input taken
+  | "skip", [ n_expr ] ->
     let n =
       match eval_in_ctx env input n_expr with
       | Value.Int n -> n
       | _ -> Error.raise_ ~loc Type_mismatch "skip requires integer argument"
     in
-    match input with
-    | Value.Array xs ->
-      Value.Array (List.to_seq xs |> Seq.drop n |> List.of_seq)
-    | _ ->
-      Error.raise_ ~loc Type_mismatch
-        (Printf.sprintf "skip requires array, got %s"
-           (Value.type_name input)))
+    require_collection "skip" input loc;
+    let s = Value.to_seq input in
+    let skipped = Seq.drop n s in
+    wrap_result input skipped
   | "count", [] -> (
     match input with
     | Value.Array xs -> Value.Int (List.length xs)
+    | Value.Seq s -> Value.Int (Seq.fold_left (fun acc _ -> acc + 1) 0 s)
     | Value.Object kvs -> Value.Int (List.length kvs)
     | Value.String s -> Value.Int (String.length s)
     | Value.Null -> Value.Int 0
@@ -137,15 +142,16 @@ let dispatch env input name args loc =
   | "length", [] -> (
     match input with
     | Value.Array xs -> Value.Int (List.length xs)
+    | Value.Seq s -> Value.Int (Seq.fold_left (fun acc _ -> acc + 1) 0 s)
     | Value.Object kvs -> Value.Int (List.length kvs)
     | Value.String s -> Value.Int (String.length s)
     | Value.Null -> Value.Int 0
     | _ -> Value.Int 1)
 
-  (* === Aggregation === *)
+  (* === Aggregation (always realizes) === *)
   | "sum", [] ->
-    let xs = as_list input in
-    List.fold_left
+    let s = as_seq input in
+    Seq.fold_left
       (fun acc item ->
         match (acc, item) with
         | Value.Int a, Value.Int b -> Value.Int (a + b)
@@ -154,36 +160,34 @@ let dispatch env input name args loc =
         | Value.Float a, Value.Float b -> Value.Float (a +. b)
         | _ ->
           Error.raise_ ~loc Type_mismatch "sum requires numeric elements")
-      (Value.Int 0) xs
+      (Value.Int 0) s
   | "min", [] -> (
-    let xs = as_list input in
-    match xs with
-    | [] -> Error.raise_ ~loc Runtime_error "min on empty array"
-    | _ ->
-      List.fold_left
+    let s = as_seq input in
+    match s () with
+    | Seq.Nil -> Error.raise_ ~loc Runtime_error "min on empty collection"
+    | Seq.Cons (first, rest) ->
+      Seq.fold_left
         (fun acc item ->
           if Interpreter.value_compare item acc < 0 then item else acc)
-        (List.hd xs) (List.tl xs))
+        first rest)
   | "max", [] -> (
-    let xs = as_list input in
-    match xs with
-    | [] -> Error.raise_ ~loc Runtime_error "max on empty array"
-    | _ ->
-      List.fold_left
+    let s = as_seq input in
+    match s () with
+    | Seq.Nil -> Error.raise_ ~loc Runtime_error "max on empty collection"
+    | Seq.Cons (first, rest) ->
+      Seq.fold_left
         (fun acc item ->
           if Interpreter.value_compare item acc > 0 then item else acc)
-        (List.hd xs) (List.tl xs))
+        first rest)
   | "avg", [] ->
-    let xs = as_list input in
-    let n = List.length xs in
-    if n = 0 then Error.raise_ ~loc Runtime_error "avg on empty array"
-    else
-      let total =
-        List.fold_left
-          (fun acc item -> acc +. Value.to_float_exn item)
-          0.0 xs
-      in
-      Value.Float (total /. Float.of_int n)
+    let s = as_seq input in
+    let total, n =
+      Seq.fold_left
+        (fun (total, n) item -> (total +. Value.to_float_exn item, n + 1))
+        (0.0, 0) s
+    in
+    if n = 0 then Error.raise_ ~loc Runtime_error "avg on empty collection"
+    else Value.Float (total /. Float.of_int n)
 
   (* === String functions === *)
   | "lower", [] -> (
@@ -237,27 +241,22 @@ let dispatch env input name args loc =
       Error.raise_ ~loc Type_mismatch
         (Printf.sprintf "split requires string, got %s"
            (Value.type_name input)))
-  | "join", [ sep_expr ] -> (
+  | "join", [ sep_expr ] ->
     let sep =
       match eval_in_ctx env input sep_expr with
       | Value.String s -> s
       | _ -> Error.raise_ ~loc Type_mismatch "join requires string argument"
     in
-    match input with
-    | Value.Array xs ->
-      let strs =
-        List.map
-          (fun v ->
-            match v with
-            | Value.String s -> s
-            | other -> Interpreter.value_to_string other)
-          xs
-      in
-      Value.String (String.concat sep strs)
-    | _ ->
-      Error.raise_ ~loc Type_mismatch
-        (Printf.sprintf "join requires array, got %s"
-           (Value.type_name input)))
+    require_collection "join" input loc;
+    let strs =
+      Seq.map
+        (fun v ->
+          match v with
+          | Value.String s -> s
+          | other -> Interpreter.value_to_string other)
+        (Value.to_seq input)
+    in
+    Value.String (String.concat sep (List.of_seq strs))
 
   (* === Object functions === *)
   | "keys", [] -> (
@@ -337,7 +336,6 @@ let dispatch env input name args loc =
   | "range", args -> (
     match args with
     | [] ->
-      (* infinite range from 0 *)
       Value.Seq (Seq.ints 0 |> Seq.map (fun i -> Value.Int i))
     | [ end_expr ] ->
       let end_val =
@@ -345,8 +343,7 @@ let dispatch env input name args loc =
         | Value.Int n -> n
         | _ -> Error.raise_ ~loc Type_mismatch "range requires integer"
       in
-      Value.Array
-        (List.init end_val (fun i -> Value.Int i))
+      Value.Array (List.init end_val (fun i -> Value.Int i))
     | [ start_expr; end_expr ] ->
       let start_val =
         match eval_in_ctx env input start_expr with

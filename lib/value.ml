@@ -71,3 +71,11 @@ let to_assoc_exn = function
   | v -> failwith ("expected object, got " ^ type_name v)
 
 let realize = function Seq s -> Array (List.of_seq s) | v -> v
+
+let to_seq = function
+  | Array xs -> List.to_seq xs
+  | Seq s -> s
+  | v -> failwith ("expected array or sequence, got " ^ type_name v)
+
+let is_seq = function Seq _ -> true | _ -> false
+let is_collection = function Array _ | Seq _ -> true | _ -> false
