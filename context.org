@@ -15,7 +15,7 @@ competed on runtime. jx competes on language design.
 =~/dev/sandbox/jx/=
 
 ** Status
-Working prototype. 33/33 tests passing. CLI functional.
+Working prototype. 44/44 tests passing. CLI functional.
 
 ** Core Design Rules
 1. =.field= — dot is always data (field access)
@@ -65,7 +65,8 @@ and =Stdlib_fns=. Interpreter calls stdlib via the ref; =Stdlib_fns= calls
 | lib/error.ml      |    57 | Structured errors with locations      |
 | lib/printer.ml    |     5 | JSON output via yojson                |
 | bin/main.ml       |    71 | CLI with cmdliner                     |
-| test/test_jx.ml   |   228 | 33 test cases                        |
+| test/test_jx.ml   |   298 | 44 test cases                        |
+| bench/bench_lazy.ml |  120 | Lazy sequence memory benchmark       |
 | PLAN.org          |   260 | Project plan with phases              |
 | *Total*           | *2140* |                                      |
 
@@ -272,6 +273,142 @@ error[key_not_found]: key "nme" not found
 Levenshtein distance <= 3 triggers "did you mean?" for both field names and
 function names. If no close match, lists all available options.
 
+* Lazy Sequences
+
+** The Problem
+
+jq uses generators — every expression can yield multiple values. Powerful but
+confusing. Simple "array in, array out" is easier to understand but wastes
+memory: filtering 1M elements to find 5 matches still allocates the full 1M
+array plus the filter result.
+
+** The Solution: Lazy In, Lazy Out
+
+Collections flow through pipelines as OCaml =Seq.t= when the source is lazy,
+and as =list= when the source is eager. The user never sees the difference —
+both print as JSON arrays.
+
+The rule: *if input is =Seq=, output stays =Seq=. If input is =Array=, output
+stays =Array=.* Laziness propagates; eagerness is preserved.
+
+#+begin_src ocaml
+(* In stdlib_fns.ml *)
+let wrap_result input seq =
+  if Value.is_seq input then Value.Seq seq
+  else Value.Array (List.of_seq seq)
+#+end_src
+
+** Which Functions Are Lazy?
+
+| Function   | Lazy? | Notes                                 |
+|------------+-------+---------------------------------------|
+| =where=     | Yes   | =Seq.filter=                           |
+| =map=       | Yes   | =Seq.map=                              |
+| =take=      | Yes   | =Seq.take= — this is the key one      |
+| =skip=      | Yes   | =Seq.drop=                             |
+| =flatten=   | Yes   | =Seq.flat_map=                         |
+| =unique=    | Yes   | =Seq.filter= with hashtable tracking   |
+| =first=     | Yes   | Peeks first element of =Seq=           |
+| =sort_by=   | *No*  | Must realize to sort                   |
+| =group_by=  | *No*  | Must realize to group                  |
+| =reverse=   | *No*  | Must realize to reverse                |
+| =last=      | *No*  | Must realize to find last              |
+| =sum/avg=   | *No*  | Aggregation consumes the sequence      |
+| =count=     | *No*  | Must consume entire sequence            |
+| =range=     | Yes   | 0-arg =range= produces infinite =Seq= |
+
+** How It Works: Pipeline Example
+
+#+begin_src bash
+range | where (. % 2 == 0) | map (. * .) | take 3
+#+end_src
+
+Step by step:
+1. =range= produces =Seq(0, 1, 2, 3, ...)= — nothing computed yet
+2. =where= wraps it in =Seq.filter= — still nothing computed
+3. =map= wraps that in =Seq.map= — still nothing computed
+4. =take 3= wraps in =Seq.take 3= — still nothing computed
+5. Printer calls =Value.realize= which calls =List.of_seq=
+6. *Now* it pulls 3 values through the chain: 0, 4, 16
+7. Only 6 elements of the infinite range were ever examined
+
+** The Initial Problem (What Was Broken)
+
+The first implementation had =Seq.t= in the value type but =implicit_iter=
+eagerly converted everything to lists:
+
+#+begin_src ocaml
+(* BROKEN: old implicit_iter — kills laziness *)
+let implicit_iter input f =
+  match input with
+  | Value.Array xs -> Value.Array (f xs)
+  | Value.Seq s -> Value.Array (f (List.of_seq s))   (* <-- realizes! *)
+  | _ -> Error.raise_ ...
+#+end_src
+
+=range | take 5= would error with "take requires array, got sequence" because
+=take= only accepted =Array=, not =Seq=. Infinite pipelines were impossible.
+
+** The Fix
+
+Replaced =implicit_iter= (which forced everything to lists) with =Seq=-aware
+dispatch. Each collection function now works on =Seq.t= directly:
+
+#+begin_src ocaml
+(* FIXED: where preserves Seq *)
+| "where", [ pred ] ->
+  require_collection "where" input loc;
+  let s = Value.to_seq input in
+  let filtered = Seq.filter (fun item -> ...) s in
+  wrap_result input filtered    (* Seq in -> Seq out *)
+#+end_src
+
+=wrap_result= checks the original input type: if it was =Seq=, return =Seq=.
+If it was =Array=, realize and return =Array=. This means arrays still behave
+exactly as before (no regression), while sequences stay lazy.
+
+** Benchmark Results
+
+#+begin_src
+--- take 10 from different input sizes ---
+  eager 10K array | take 10:    0.9ms    1,167 KB allocated
+  eager 100K array | take 10:   24ms    22,098 KB allocated
+  eager 1M array | take 10:    256ms   225,069 KB allocated
+  lazy  infinite | take 10:   0.02ms       24 KB allocated
+
+--- filter + take 5 ---
+  eager 1M array | where | take 5:  285ms  318,822 KB allocated
+  lazy  infinite | where | take 5: 0.02ms       27 KB allocated
+#+end_src
+
+Eager allocation scales linearly with input size (must parse the entire JSON
+array). Lazy is constant: 24 KB regardless of conceptual source size.
+
+** Remaining Limitations
+
+*** Aggregation Allocation
+=sum= over lazy sequences still allocates O(n) — each =Value.Int= wrapper
+costs words as =Seq.fold_left= traverses the thunks. True O(1) would need a
+fused numeric fold that unpacks values during iteration. Currently:
+
+#+begin_src
+  range | take 1M | sum:  17ms  234,417 KB allocated
+#+end_src
+
+Not terrible, but not the constant-memory ideal.
+
+*** JSON Input Is Eager
+=yojson= parses the entire JSON file into memory. Lazy sequences only help
+with generated data (=range=) and intermediate pipeline steps. A streaming
+JSON parser (SAX-style) would be needed to lazily process large JSON files
+from disk. This is a Phase 2+ feature.
+
+*** Inherently Eager Operations
+=sort_by=, =group_by=, =reverse=, =last= must see all elements. They call
+=List.of_seq= internally, realizing the entire sequence. This is correct
+behavior — you cannot sort an infinite sequence. Using these on =range=
+without =take= will hang.
+
 * Known Limitations & Cuts
 
 ** Parser
@@ -284,10 +421,16 @@ function names. If no close match, lists all available options.
 - Cross-type =value_compare= falls back to comparing type name strings
 - No tail-call optimization for deep pipelines
 
-** Lazy Sequences (NOT IMPLEMENTED)
-=Seq.t= exists in =Value.t= but only =range= with 0 args produces one.
-=where=, =map=, =take= all work eagerly on lists. The Clojure-style infinite
-collections idea is stubbed, not real. This is the biggest gap.
+** Lazy Sequences (Remaining Gaps)
+Lazy sequences are implemented and working. See "Lazy Sequences" section
+below for full details. Remaining gaps:
+- =sum= over lazy seqs still allocates O(n) due to =Value.t= wrapper per
+  element in the =Seq.fold_left=. True O(1) would need fused numeric fold.
+- JSON input is still parsed eagerly into memory. Lazy sequences only help
+  with generated data (=range=) and pipeline transformations. Streaming JSON
+  parser would be needed for true streaming from disk.
+- =sort_by=, =group_by=, =reverse=, =last= always realize the full sequence
+  (inherently non-lazy operations).
 
 ** Stdlib Gaps
 Not implemented (mentioned in plan):
@@ -308,8 +451,9 @@ Not implemented (mentioned in plan):
 - No inline JSON as second positional arg
 
 ** Tests
-- 33 tests cover happy paths only
-- No error case tests (except strict null)
+- 44 tests (33 core + 11 lazy sequence tests)
+- Lazy tests include a proof-of-laziness test (skips 1M elements, would hang if eager)
+- No error case tests beyond strict null
 - No edge cases: empty arrays, unicode, large numbers, deeply nested objects
 - No property-based testing or fuzzing
 
