@@ -1,0 +1,135 @@
+#+TITLE: Parallelism Analysis for jx
+#+DATE: 2026-03-09
+
+* jq: Zero Parallelism
+
+jq is completely single-threaded. Stack-based bytecode VM with backtracking for multiple outputs. No SIMD, no OpenMP, no parallel filter execution, no async I/O.
+
+Only threading code is *thread-local storage* (~jv_thread.h~, ~jv_alloc.c~) — makes libjq safe to use from multiple threads in embedding scenarios, but execution itself is sequential. Has a pthread regression test that verifies three threads can independently compile/run jq filters without segfaulting.
+
+One optimization worth noting: *tail call optimization* in the bytecode compiler. That's it for cleverness.
+
+** jq Execution Model
+
+#+begin_example
+User Code (jq filter string)
+    ↓
+Parser → Compiler → Bytecode
+    ↓
+Bytecode Interpreter (single thread)
+    ├─ Opcode execution loop in jq_next()
+    ├─ Stack-based value passing
+    ├─ FORK opcode creates choice points (not OS fork)
+    └─ Backtracking yields multiple results sequentially
+    ↓
+Results (one per jq_next() call)
+#+end_example
+
+* jx: Also Zero Parallelism (But Better Foundation)
+
+Tree-walk interpreter, single-threaded. But the transducer pipeline is a stronger foundation for parallelism than jq's backtracking VM — transducers compose without intermediate allocations and have clear data-flow boundaries.
+
+* Where Parallelism Could Help
+
+Three tiers, ranked by impact vs. effort.
+
+** Tier 1: Array Partitioning (High Value, Medium Effort)
+
+When input is a materialized ~Array~ and operation is a transducible function (~where~, ~map~, ~flatten~, ~unique~):
+
+#+begin_src jx
+[1M items] | where .price > 100 | map {name, price}
+#+end_src
+
+Split array into N chunks → apply composed transducer to each chunk in parallel → merge results. Order-preserving because you know chunk boundaries.
+
+*** OCaml 5 Approach
+
+Use ~Domain.spawn~ directly. No need for effects — this is embarrassingly parallel.
+
+#+begin_src ocaml
+let parallel_transduce ~chunks xd source =
+  let parts = Array.init chunks (fun i -> slice source i chunks) in
+  let domains = Array.map (fun part ->
+    Domain.spawn (fun () -> Transducer.run xd (Array.to_seq part))
+  ) parts in
+  Array.to_list domains
+  |> List.map Domain.join
+  |> List.concat
+#+end_src
+
+Expected: *2-4x speedup on 4 cores* for large arrays. Won't help for small inputs — need a threshold (~10K elements minimum to amortize overhead).
+
+*** Problem Children
+
+~take~, ~skip~ — order-dependent, can't naively partition. Would need a two-pass approach or sequential fallback.
+
+** Tier 2: Streaming JSON Parser (High Value, High Effort)
+
+The actual bottleneck is *not* the interpreter — it's Yojson. Entire JSON tree materialized eagerly in memory. Identity pass-through is 3x slower than jq because of this.
+
+*** Options
+
+- *SAX-style parser* feeding directly into transducer pipeline — never build full tree
+- *Parallel chunked parsing* — split input at top-level array boundaries, parse chunks in parallel
+
+*** Effects-Based Streaming
+
+This is where OCaml 5 effects become interesting. An effect-based streaming parser could yield values as they're parsed:
+
+#+begin_src ocaml
+type _ Effect.t += Emit : Value.t -> unit Effect.t
+
+let parse_streaming input =
+  (* parse top-level array, emit each element as effect *)
+  Array.iter (fun element ->
+    Effect.perform (Emit element)
+  ) ...
+#+end_src
+
+Handler runs transducer pipeline on each emitted value. No intermediate tree. Substantial work though — essentially replacing Yojson.
+
+** Tier 3: Pipeline-Level Parallelism (Low Value)
+
+Parallelizing independent branches of a pipeline:
+
+#+begin_src jx
+{slow: (. | expensive_op), fast: (. | cheap_op)}
+#+end_src
+
+Could evaluate both branches in parallel. But jq queries are typically linear pipes, not wide DAGs. Low practical benefit, high implementation complexity.
+
+* OCaml 5 Mechanisms
+
+| Mechanism    | What It Does                                  | Useful Here?                              |
+|--------------+-----------------------------------------------+-------------------------------------------|
+| *Domains*    | OS-level parallelism (true multi-core)        | Tak — array partitioning                  |
+| *Effects*    | Algebraic effects (cooperative, single-domain) | Maybe — streaming parser                  |
+| *Eio*        | Effect-based I/O library                      | Ni — jx is CPU-bound, not I/O-bound       |
+| *Domainslib* | Task pools, parallel-for, futures             | Tak — cleaner than raw Domain.spawn       |
+
+*Domains* are the main tool. ~Domain.spawn~ gives real parallel execution. *Domainslib* gives ~Task.parallel_for~ which is exactly what array partitioning needs.
+
+*Effects* are for structured concurrency within a single domain — cooperative multitasking, not parallelism. Useful for a streaming parser that yields values, but won't make anything faster by themselves.
+
+* Shared State Problems
+
+Before any parallelism works, these need fixing:
+
+1. ~dispatch_ref~ and ~xd_run_ref~ — mutable refs shared across evaluation. Need to be passed as arguments or use domain-local storage.
+2. ~Hashtbl~ in ~unique~ / ~group_by~ — not thread-safe. Need per-domain tables or concurrent hash maps.
+3. ~Seq.t~ — OCaml's lazy sequences are not thread-safe. Array partitioning sidesteps this (each domain gets its own slice).
+
+* Recommended Path
+
+** Step 1: Array Partitioning (~200 LOC)
+
+~Domainslib.Task.parallel_for~ on materialized arrays for transducible operations. Threshold at ~10K elements. Immediate 2-4x on large inputs.
+
+** Step 2: Streaming JSON Parser (~500+ LOC)
+
+Replace Yojson with streaming parser for large inputs. Fixes the actual bottleneck (3x slower than jq on identity).
+
+** Skip
+
+Effects-based concurrency, pipeline parallelism. Not where the wins are for a jq replacement.
