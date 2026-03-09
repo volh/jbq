@@ -92,7 +92,11 @@ let token_to_string = function
   | IN -> "in"
   | EOF -> "<eof>"
 
-type positioned_token = { token : token; pos : int }
+type positioned_token = {
+  token : token;
+  start_pos : int;
+  end_pos : int;
+}
 
 let keywords =
   [
@@ -109,8 +113,11 @@ let keywords =
 let tokenize (input : string) : positioned_token list =
   let buf = Sedlexing.Utf8.from_string input in
   let tokens = ref [] in
-  let pos () = fst (Sedlexing.loc buf) in
-  let add token = tokens := { token; pos = pos () } :: !tokens in
+  let span () = Sedlexing.loc buf in
+  let add token =
+    let start_pos, end_pos = span () in
+    tokens := { token; start_pos; end_pos } :: !tokens
+  in
   let rec scan () =
     match%sedlex buf with
     | Plus (Chars " \t\n\r") -> scan ()
@@ -170,7 +177,8 @@ let tokenize (input : string) : positioned_token list =
     | eof -> add EOF
     | _ ->
       let ch = Sedlexing.Utf8.lexeme buf in
-      Error.raise_ ~loc:{ start_pos = pos (); end_pos = pos () + 1 } Parse_error
+      let start_pos, end_pos = span () in
+      Error.raise_ ~loc:{ start_pos; end_pos } Parse_error
         (Printf.sprintf "unexpected character: %s" ch)
   and scan_interp_string strbuf acc =
     match%sedlex buf with

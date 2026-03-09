@@ -61,6 +61,31 @@ let test_arithmetic () =
     "arithmetic" "7"
     (eval_str ".a + .b" {|{"a": 3, "b": 4}|})
 
+let test_subtraction_associativity () =
+  Alcotest.(check string)
+    "subtraction is left associative" "5"
+    (eval_str "10 - 3 - 2" "null")
+
+let test_division_associativity () =
+  Alcotest.(check string)
+    "division is left associative" "2"
+    (eval_str "20 / 5 / 2" "null")
+
+let test_modulo_associativity () =
+  Alcotest.(check string)
+    "modulo is left associative" "0"
+    (eval_str "8 % 3 % 2" "null")
+
+let test_concat_associativity () =
+  Alcotest.(check string)
+    "concat is left associative" "\"a12\""
+    (eval_str {|"a" ++ 1 ++ 2|} "null")
+
+let test_operator_precedence () =
+  Alcotest.(check string)
+    "multiplication binds tighter than addition" "7"
+    (eval_str "1 + 2 * 3" "null")
+
 let test_string_concat () =
   Alcotest.(check string)
     "string concat" "\"hello world\""
@@ -133,6 +158,27 @@ let test_group_by () =
     {|{"a":[{"t":"a","v":1},{"t":"a","v":2}],"b":[{"t":"b","v":3}]}|}
     (eval_str "group_by .t"
        {|[{"t":"a","v":1},{"t":"b","v":3},{"t":"a","v":2}]|})
+
+let test_pick_space_separated_args () =
+  Alcotest.(check string)
+    "pick supports space separated dotted args"
+    {|{"name":"Alice","email":"a@b.com"}|}
+    (eval_str "pick .name .email"
+       {|{"name":"Alice","email":"a@b.com","age":30}|})
+
+let test_pick_semicolon_args () =
+  Alcotest.(check string)
+    "pick supports semicolon separated field args"
+    {|{"name":"Alice","email":"a@b.com"}|}
+    (eval_str "pick .name; .email"
+       {|{"name":"Alice","email":"a@b.com","age":30}|})
+
+let test_spaced_postfix_rejected () =
+  Alcotest.(check bool) "spaced postfix does not chain" true
+    (try
+       ignore (eval_str ".items [0]" {|{"items":[1,2,3]}|});
+       false
+     with Jx.Error.Jx_error _ -> true)
 
 let test_avg () =
   let result = eval_str "avg" "[1,2,3,4,5]" in
@@ -242,6 +288,11 @@ let () =
           Alcotest.test_case "nested field" `Quick test_nested_field;
           Alcotest.test_case "pipe" `Quick test_pipe;
           Alcotest.test_case "arithmetic" `Quick test_arithmetic;
+          Alcotest.test_case "subtraction associativity" `Quick test_subtraction_associativity;
+          Alcotest.test_case "division associativity" `Quick test_division_associativity;
+          Alcotest.test_case "modulo associativity" `Quick test_modulo_associativity;
+          Alcotest.test_case "concat associativity" `Quick test_concat_associativity;
+          Alcotest.test_case "operator precedence" `Quick test_operator_precedence;
           Alcotest.test_case "string concat" `Quick test_string_concat;
           Alcotest.test_case "null coalesce" `Quick test_null_coalesce;
           Alcotest.test_case "conditional" `Quick test_conditional;
@@ -262,6 +313,9 @@ let () =
           Alcotest.test_case "where | map" `Quick test_where_map_pipe;
           Alcotest.test_case "sort_by" `Quick test_sort_by;
           Alcotest.test_case "group_by" `Quick test_group_by;
+          Alcotest.test_case "pick spaced args" `Quick test_pick_space_separated_args;
+          Alcotest.test_case "pick semicolon args" `Quick test_pick_semicolon_args;
+          Alcotest.test_case "spaced postfix rejected" `Quick test_spaced_postfix_rejected;
           Alcotest.test_case "unique" `Quick test_unique;
           Alcotest.test_case "take" `Quick test_take;
           Alcotest.test_case "skip" `Quick test_skip;
