@@ -1,0 +1,399 @@
+#+TITLE: jx — Implementation Context
+#+AUTHOR: Roman Sever
+#+DATE: 2026-03-09
+#+STARTUP: overview
+
+* Project Overview
+
+jx is a jq replacement with a genuinely better query language. Written in OCaml.
+Not "jq in another language" — a new language for JSON.
+
+Every existing "better jq" (jaq, gojq, fq, query-json) kept jq's syntax and
+competed on runtime. jx competes on language design.
+
+** Repository
+=~/dev/sandbox/jx/=
+
+** Status
+Working prototype. 33/33 tests passing. CLI functional.
+
+** Core Design Rules
+1. =.field= — dot is always data (field access)
+2. =bare_word= — always a function
+3. =|= — always composition (pipe)
+
+* Architecture
+
+#+begin_src
+jx 'items | where .price > 100 | map {name, price}' data.json
+
+  ┌────────┐    ┌────────┐    ┌─────┐    ┌─────────────┐    ┌────────┐
+  │ Lexer  │ -> │ Parser │ -> │ AST │ -> │ Interpreter │ -> │ Output │
+  └────────┘    └────────┘    └─────┘    └─────────────┘    └────────┘
+   sedlex       recursive                  eager eval        yojson
+   238 lines    457 lines     58 lines     304 lines         5 lines
+#+end_src
+
+** Module Dependency Graph
+#+begin_src
+  Ast  <-- Error  <-- Lexer  <-- Parser
+   ^                                |
+   |                                v
+  Value <-- Interpreter <-------- (parse_expr for interpolation)
+               ^
+               | dispatch_ref (mutable)
+               v
+           Stdlib_fns
+               |
+           Printer <-- main.ml
+#+end_src
+
+The =dispatch_ref= mutable breaks a cyclic dependency between =Interpreter=
+and =Stdlib_fns=. Interpreter calls stdlib via the ref; =Stdlib_fns= calls
+=Interpreter.eval= directly. One-way dependency at the module level.
+
+* File Inventory
+
+| File              | Lines | Purpose                              |
+|-------------------+-------+--------------------------------------|
+| lib/ast.ml        |    58 | Expression types, 17 AST constructors |
+| lib/lexer.ml      |   238 | sedlex tokenizer, string interpolation |
+| lib/parser.ml     |   457 | Recursive descent, precedence climbing |
+| lib/interpreter.ml |  304 | Eval AST against JSON values          |
+| lib/stdlib_fns.ml |   388 | 30+ built-in functions                |
+| lib/value.ml      |    74 | Runtime values (JSON + Seq.t)         |
+| lib/error.ml      |    57 | Structured errors with locations      |
+| lib/printer.ml    |     5 | JSON output via yojson                |
+| bin/main.ml       |    71 | CLI with cmdliner                     |
+| test/test_jx.ml   |   228 | 33 test cases                        |
+| PLAN.org          |   260 | Project plan with phases              |
+| *Total*           | *2140* |                                      |
+
+* Language Features (Implemented)
+
+** Field Access
+#+begin_src bash
+jx '.name'                        # top-level field
+jx '.user.address.city'           # nested
+jx '.[0]'                         # array index
+jx '.[1:3]'                       # slice
+jx '.[-1]'                        # negative index
+jx '.name?'                       # optional (null if missing)
+jx '.name'                        # strict (error if missing)
+#+end_src
+
+** Pipes
+#+begin_src bash
+jx '.items | where .price > 100 | map .name'
+jx '.name | lower | truncate 20'
+#+end_src
+
+** Object Construction with Punning
+#+begin_src bash
+jx '{name, price}'                # => {name: .name, price: .price}
+jx '{name, total: .price * .qty}' # mixed
+#+end_src
+
+Punning checks env first (for let-bound variables), then falls back to
+field access on input.
+
+** String Interpolation
+#+begin_src bash
+jx '"hello ${.name}, age ${.age}"'
+jx '"total: ${.price * .qty}"'
+jx '"literal dollar: \$${.price}"'   # escaped $
+#+end_src
+
+Implementation: lexer detects =${= inside strings, collects expression source
+until balanced =}= (tracking brace depth), emits =INTERP_STRING= token with
+parts. Parser creates sub-parser for each expression part. Interpreter
+concatenates results via =value_to_string=.
+
+** Operators
+#+begin_src
++  -  *  /  %          # arithmetic
+== != < > <= >=        # comparison
+&& ||                  # logical
+!                      # negation
+++                     # string concat
+??                     # null coalesce
+#+end_src
+
+** Control Flow
+#+begin_src bash
+jx 'if .price > 100 then "expensive" else "cheap"'
+jx 'let total = .price * .qty in {name, total}'
+jx 'map (x => {name: x.name})'    # lambda
+#+end_src
+
+** Implicit Iteration
+When input is an array, collection functions iterate implicitly:
+#+begin_src bash
+echo '[1,2,3,4,5]' | jx 'where . > 3'   # [4, 5]
+# No need for: .[] | select(. > 3) | [.]
+#+end_src
+
+* Stdlib (30 functions implemented)
+
+** Collection
+| Function        | Args     | Description                             |
+|-----------------+----------+-----------------------------------------|
+| =where=          | expr     | Filter by predicate (implicit iteration) |
+| =map=            | expr     | Transform each element                  |
+| =sort_by=        | expr     | Sort by expression result               |
+| =group_by=       | expr     | Group into object (not nested arrays)   |
+| =unique=         | /none/   | Deduplicate, preserves insertion order  |
+| =flatten=        | /none/   | Flatten one level of nesting            |
+| =reverse=        | /none/   | Reverse array                           |
+
+** Slicing
+| Function | Args   | Description   |
+|----------+--------+---------------|
+| =first=   | /none/ | First element |
+| =last=    | /none/ | Last element  |
+| =take=    | n      | First n       |
+| =skip=    | n      | Skip n        |
+| =count=   | /none/ | Length        |
+| =length=  | /none/ | Alias for count |
+
+** Aggregation
+| Function | Description  |
+|----------+--------------|
+| =sum=      | Sum numbers  |
+| =min=      | Minimum      |
+| =max=      | Maximum      |
+| =avg=      | Average (returns float) |
+
+** String
+| Function     | Args | Description                          |
+|--------------+------+--------------------------------------|
+| =lower=       | /none/ | Lowercase (ascii)                  |
+| =upper=       | /none/ | Uppercase (ascii)                  |
+| =trim=        | /none/ | Strip whitespace                   |
+| =truncate=    | n    | Safe truncate to n chars             |
+| =split=       | sep  | Split string (*single char only*)    |
+| =join=        | sep  | Join array with separator            |
+
+** Object
+| Function | Args     | Description         |
+|----------+----------+---------------------|
+| =keys=     | /none/   | Keys (insertion order) |
+| =values=   | /none/   | Values              |
+| =pick=     | fields   | Select specific keys |
+| =omit=     | fields   | Remove specific keys |
+
+** Type
+| Function    | Description           |
+|-------------+-----------------------|
+| =type=        | Returns type name string |
+| =to_string=   | Convert to string     |
+| =to_number=   | Parse string to number |
+
+** Generator
+| Function | Args     | Description                     |
+|----------+----------+---------------------------------|
+| =range=    | 0 args   | Infinite sequence (0, 1, 2...) |
+| =range=    | 1 arg (n) | [0..n)                        |
+| =range=    | 2 args   | [start..end)                  |
+
+* Parser Details
+
+** Precedence (low to high)
+1. pipe (=|=)
+2. or (=||=)
+3. and (=&&=)
+4. equality (===, =!==)
+5. comparison (=<=, =>=, =<==, =>==)
+6. null coalesce (=??=)
+7. concat (=++=)
+8. additive (=+=, =-=)
+9. multiplicative (=*=, =/=, =%=)
+10. unary (=!=, unary =-=)
+11. postfix (=.field=, =[index]=, =?=)
+12. primary (literals, identifiers, parens)
+
+** Function Call Parsing
+Bare identifiers are parsed as function calls. Arguments are collected until
+a terminator token (=|=, =,=, =)=, =]=, =}=, =;=, =EOF=, =then=, =else=, =in=).
+
+Semicolons separate function arguments: =sort_by .price; .name=
+
+If ==>= follows an identifier, it's parsed as a lambda: =x => x.name=
+
+** String Interpolation Parsing
+=INTERP_STRING= tokens contain =Lit= and =Expr= parts. The parser creates a
+sub-parser state for each =Expr= part's source string and calls =parse_expr=
+on it. This means full expression syntax works inside =${...}=.
+
+* Interpreter Details
+
+** Value Types
+#+begin_src ocaml
+type t =
+  | Null | Bool of bool
+  | Int of int | Float of float
+  | String of string
+  | Array of t list
+  | Object of (string * t) list    (* preserves insertion order *)
+  | Seq of t Seq.t                 (* lazy, internal only *)
+#+end_src
+
+** Truthiness
+Falsy: =null=, =false=, =0=, =0.0=, =""=, =[]=. Everything else is truthy.
+
+** Null Handling
+Strict by default. =.missing= on an object raises =Key_not_found= with
+available keys listed and Levenshtein-based "did you mean?" suggestion.
+=.missing?= returns =null=.
+
+** Arithmetic
+Mixed int/float promotes to float. Division by zero raises error (not infinity).
+
+** Object Punning with Env
+={name, total}= checks let-bound env first, then field access. This means
+=let x = 1 in {x}= produces ={x: 1}= not ={x: .x}=.
+
+* Error System
+
+** Error Kinds
+=parse_error=, =key_not_found=, =index_out_of_bounds=, =type_mismatch=,
+=null_access=, =unknown_function=, =arity_mismatch=, =runtime_error=
+
+** Error Display Format
+#+begin_src
+error[key_not_found]: key "nme" not found
+  |
+  | .nme
+  |  ^^^
+  = help: did you mean .name?
+#+end_src
+
+** Suggestion Engine
+Levenshtein distance <= 3 triggers "did you mean?" for both field names and
+function names. If no close match, lists all available options.
+
+* Known Limitations & Cuts
+
+** Parser
+- =split= only works on single-character separators (=String.split_on_char=)
+- Negative number literals parse as unary minus (works for math, fails in =take -1=)
+- No multiline comments
+
+** Interpreter
+- =dispatch_ref= mutable is a hack for cyclic dependency
+- Cross-type =value_compare= falls back to comparing type name strings
+- No tail-call optimization for deep pipelines
+
+** Lazy Sequences (NOT IMPLEMENTED)
+=Seq.t= exists in =Value.t= but only =range= with 0 args produces one.
+=where=, =map=, =take= all work eagerly on lists. The Clojure-style infinite
+collections idea is stubbed, not real. This is the biggest gap.
+
+** Stdlib Gaps
+Not implemented (mentioned in plan):
+- =replace=, =starts_with=, =ends_with=, =contains=
+- =flatten= with depth control
+- =find= (first match), =some= (any match?), =partition=
+- =pick= / =omit= arg parsing is fragile (expects AST field nodes)
+
+** Error Messages
+- Location tracking is approximate — positions don't always propagate correctly
+- Caret pointer sometimes misaligned for multi-token expressions
+- Unknown function with Levenshtein > 3 dumps all function names (noisy)
+
+** CLI
+- Reads entire stdin into memory (no streaming)
+- No =--null-input= / =-n= flag
+- No =--slurp= for JSONL input
+- No inline JSON as second positional arg
+
+** Tests
+- 33 tests cover happy paths only
+- No error case tests (except strict null)
+- No edge cases: empty arrays, unicode, large numbers, deeply nested objects
+- No property-based testing or fuzzing
+
+** Architecture
+- No =.mli= interface files — everything is public
+- No barrel module for clean API export
+
+* Dependencies
+
+| Package    | Version | Purpose                        |
+|------------+---------+--------------------------------|
+| ocaml      | >= 5.4  | Language                       |
+| dune       | >= 3.17 | Build system                   |
+| cmdliner   | >= 1.3  | CLI argument parsing           |
+| sedlex     |         | Unicode-aware lexer            |
+| yojson     | >= 2.0  | JSON parsing and output        |
+| alcotest   |         | Test framework (test only)     |
+| ocamlformat | 0.27.0 | Code formatting (dev only)    |
+
+* Build & Run
+
+#+begin_src bash
+# Setup (first time)
+cd ~/dev/sandbox/jx
+opam switch create . 5.4.0 --yes
+opam install cmdliner sedlex yojson alcotest -y
+
+# Build
+eval $(opam env) && dune build @all
+
+# Test
+dune build @runtest
+
+# Run
+echo '{"name":"Alice"}' | dune exec bin/main.exe -- '.name'
+
+# Or with make
+make build
+make test
+make run ARGS="'.name' test.json"
+#+end_src
+
+* Comparison with jq
+
+#+begin_src bash
+# Filter + pick fields
+jq  '.items[] | select(.price > 100) | {name, price}'
+jx  'where .price > 100 | map {name, price}'
+
+# String manipulation
+jq  '.name | ascii_downcase | ltrimstr("mr. ")'
+jx  '.name | lower | trim_start "mr. "'
+
+# Group by (jq returns nested arrays, jx returns object)
+jq  'group_by(.type) | map({type: .[0].type, items: .})'
+jx  'group_by .type'
+
+# String interpolation
+jq  '"hello \(.name), age \(.age)"'
+jx  '"hello ${.name}, age ${.age}"'
+
+# Null handling
+jq  '.missing'          # null (silent)
+jx  '.missing'          # error[key_not_found] with suggestion
+jx  '.missing?'         # null (explicit opt-in)
+
+# Keys (jq sorts, jx preserves order)
+jq  'keys'              # ["a", "b"] (sorted)
+jx  'keys'              # ["b", "a"] (insertion order)
+#+end_src
+
+* Prior Art Reference
+
+| Tool       | Language | Approach                          | Syntax Change? |
+|------------+----------+-----------------------------------+----------------|
+| jq         | C        | The original                      | —              |
+| query-json | OCaml    | Better names, strict nulls, REPL  | Minimal        |
+| jaq        | Rust     | Fastest clone, multi-format I/O   | No             |
+| gojq       | Go       | Arbitrary precision, embeddable   | No             |
+| fq         | Go       | Binary formats (150+)             | No             |
+| *jx*       | OCaml    | *New query language*              | *Yes*          |
+
+query-json source at =~/repos/query-json/= — used as reference for:
+- Parser structure (recursive descent with sedlex)
+- Error formatting approach (caret pointers)
+- Interpreter patterns (eval function dispatch)
+- Stdlib function naming conventions

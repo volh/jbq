@@ -1,0 +1,259 @@
+#+TITLE: jx — A Better Query Language for JSON
+#+AUTHOR: Roman Sever
+#+DATE: 2026-03-09
+
+* Vision
+
+A jq replacement with a genuinely better query language. Not "jq in Rust" — a
+new language that's readable, concise, and unambiguous.
+
+Every existing "better jq" (jaq, gojq, fq, query-json) kept jq's syntax and
+competed on runtime performance. jx competes on *language design*.
+
+#+begin_src bash
+# jq
+.items[] | select(.price > 100) | {name, display: (.name | ascii_downcase | .[0:20])}
+
+# jx
+items | where .price > 100 | map {name, display: .name | lower | truncate 20}
+#+end_src
+
+* Design Decisions (Locked)
+
+** Fresh implementation in OCaml
+Using query-json as reference/inspiration, not a fork. Own everything.
+
+** Single-value semantics with lazy sequences
+- User sees arrays in, arrays out
+- Internally, =where=, =map=, =take= etc return =Seq.t= (lazy)
+- Nothing computes until realized (printed, counted, aggregated)
+- Enables infinite ranges: =range | where (. % 2 == 0) | take 5=
+- Enables streaming: process 10GB file without loading it all
+
+** No jq compatibility
+Clean break. Migration guide, not compatibility mode.
+
+** Three rules, no exceptions
+1. =.field= — dot is always data (field access)
+2. =bare_word= — always a function
+3. =|= — always composition (pipe)
+
+** String concat: =++=
+Avoids ="3" + 4= ambiguity. Explicit string concatenation.
+
+** Implicit iteration
+When input is an array, =where .x > 5= iterates implicitly.
+No need for =items | where= when piping to a filter function.
+
+** Semicolons for function arg separation
+=sort_by .price; .name= — semicolons separate expression args.
+
+** Strict null handling
+=.missing= errors by default. =.missing?= returns null. Catches real bugs.
+
+* Language Spec (v0.1)
+
+** Syntax
+
+*** Field Access
+#+begin_src
+.name                           # top-level field
+.user.address.city              # nested field
+.[0]                            # array index
+.[1:5]                          # array slice
+.name?                          # optional (null if missing, no error)
+#+end_src
+
+*** Pipes
+#+begin_src
+.items | where .price > 100 | map .name
+.name | lower | truncate 20
+#+end_src
+
+*** Object Construction (with punning)
+#+begin_src
+{name, price}                   # => {name: .name, price: .price}
+{name, total: .price * .qty}    # mix punned + explicit
+#+end_src
+
+*** Array Construction
+#+begin_src
+[1, 2, 3]
+[.name, .email]
+#+end_src
+
+*** Operators
+#+begin_src
+# Arithmetic
+.price + .tax
+.price * .qty
+.price - .discount
+.total / .count
+
+# Comparison
+.price > 100
+.name == "Alice"
+.age >= 18
+
+# Logical
+.active && .verified
+.admin || .moderator
+!.deleted
+
+# String concat
+.first ++ " " ++ .last
+
+# Null coalescing
+.email ?? "no-email"
+#+end_src
+
+*** Conditionals
+#+begin_src
+if .price > 100 then "expensive" else "cheap"
+#+end_src
+
+*** Let Bindings
+#+begin_src
+let total = .price * .qty in {name, total}
+#+end_src
+
+*** Lambdas (when point-free isn't enough)
+#+begin_src
+items | map (x => {name: x.name, total: x.price * x.qty})
+#+end_src
+
+** Value Types
+- =null=, =true=, =false= — literals
+- =42=, =3.14= — numbers (arbitrary precision int, float)
+- ="hello"= — strings
+- =[1, 2, 3]= — arrays
+- ={a: 1, b: 2}= — objects
+- =Seq(...)= — lazy sequence (internal only, user sees array)
+
+** Stdlib (v0.1 — 20 functions)
+
+*** Collection
+| Function      | Description                       |
+|---------------+-----------------------------------|
+| =where expr=   | filter by predicate               |
+| =map expr=     | transform each element            |
+| =sort_by expr= | sort by expression                |
+| =group_by expr= | group into object (not arrays)   |
+| =unique=       | deduplicate, preserve order       |
+| =flatten=      | flatten nested arrays             |
+| =reverse=      | reverse order                     |
+
+*** Slicing
+| Function | Description     |
+|----------+-----------------|
+| =first=   | first element   |
+| =last=    | last element    |
+| =take n=  | first n         |
+| =skip n=  | skip n          |
+| =count=   | length          |
+
+*** Aggregation
+| Function | Description |
+|----------+-------------|
+| =sum=      | sum numbers |
+| =min=      | minimum     |
+| =max=      | maximum     |
+| =avg=      | average     |
+
+*** String
+| Function       | Description      |
+|----------------+------------------|
+| =lower=         | lowercase        |
+| =upper=         | uppercase        |
+| =trim=          | strip whitespace |
+| =truncate n=    | safe truncate    |
+| =split s=       | split string     |
+| =join s=        | join array       |
+
+*** Object
+| Function     | Description          |
+|--------------+----------------------|
+| =keys=        | extract keys         |
+| =values=      | extract values       |
+| =pick k1 k2=  | select specific keys |
+| =omit k1 k2=  | remove specific keys |
+
+* Architecture
+
+#+begin_src
+jx 'items | where .price > 100 | map {name, price}' data.json
+
+  ┌────────┐    ┌────────┐    ┌─────┐    ┌─────────────┐    ┌────────┐
+  │ Lexer  │ -> │ Parser │ -> │ AST │ -> │ Interpreter │ -> │ Output │
+  └────────┘    └────────┘    └─────┘    └─────────────┘    └────────┘
+   sedlex       recursive                  Seq.t lazy        JSON
+   tokens       descent                    evaluation        pretty-print
+#+end_src
+
+** Project Structure
+#+begin_src
+jx/
+├── bin/
+│   ├── main.ml               # CLI entry (cmdliner)
+│   └── dune
+├── lib/
+│   ├── lexer.ml               # sedlex tokenizer
+│   ├── parser.ml              # recursive descent -> AST
+│   ├── ast.ml                 # expression types
+│   ├── value.ml               # runtime values (json + lazy seq)
+│   ├── interpreter.ml         # eval AST against values
+│   ├── stdlib.ml              # built-in functions
+│   ├── error.ml               # structured errors with locations
+│   ├── printer.ml             # JSON output, colors
+│   └── dune
+├── test/
+│   ├── test_parser.ml
+│   ├── test_interpreter.ml
+│   └── dune
+├── dune-project
+├── jx.opam
+├── Makefile
+└── PLAN.org
+#+end_src
+
+* Build Phases
+
+** Phase 1: Skeleton [0/3]
+- [ ] dune project, cmdliner CLI, yojson for JSON parsing
+- [ ] Read stdin or file, parse JSON, print it back
+- [ ] =jx '.' file.json= works (identity)
+
+** Phase 2: Lexer + Parser + AST [0/4]
+- [ ] Token types: dot, pipe, ident, int, float, string, brackets, braces, operators
+- [ ] AST types: Identity, Field, Index, Pipe, FnCall, Object, Array, Literal, BinOp, If, Let
+- [ ] Recursive descent parser
+- [ ] Parse =items | where .price > 100 | map {name, price}=
+
+** Phase 3: Interpreter (eager first) [0/4]
+- [ ] Eval AST against JSON values
+- [ ] Field access, pipes, operators, object/array construction with punning
+- [ ] Implement where, map, sort_by as eager (arrays)
+- [ ] Get semantics right before optimizing
+
+** Phase 4: Lazy Sequences [0/3]
+- [ ] Replace array operations with Seq.t internally
+- [ ] =range= as infinite lazy sequence
+- [ ] Benchmark eager vs lazy
+
+** Phase 5: Error Messages [0/3]
+- [ ] Source locations in AST nodes
+- [ ] Caret-style error display
+- [ ] "Did you mean?" for typos (Levenshtein distance)
+
+** Phase 6: CLI Polish [0/4]
+- [ ] =--raw-output=, =--compact=, =--no-color=
+- [ ] Pretty-print with colors
+- [ ] =--help= with real examples
+- [ ] Static binary build
+
+* Prior Art (Reference)
+- query-json (OCaml) — better function names, strict nulls, REPL. ~/repos/query-json
+- jaq (Rust) — fastest jq clone, multi-format I/O
+- gojq (Go) — arbitrary precision integers, embeddable
+- fq (Go) — jq for binary formats, 150+ formats
+- All kept jq's syntax. None redesigned the language.
