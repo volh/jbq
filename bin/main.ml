@@ -2,37 +2,51 @@ let () =
   Jx.Interpreter.dispatch_ref := Jx.Stdlib_fns.dispatch;
   Jx.Value.xd_run_ref := Jx.Transducer.run
 
+let profile = match Sys.getenv_opt "JX_PROFILE" with Some "1" -> true | _ -> false
+
+let time label f =
+  if profile then (
+    let t0 = Unix.gettimeofday () in
+    let result = f () in
+    let dt = Unix.gettimeofday () -. t0 in
+    Printf.eprintf "  %-25s %8.3f ms\n%!" label (dt *. 1000.0);
+    result)
+  else f ()
+
 let run query_str input_source raw_output compact =
   try
     let json_str =
-      match input_source with
-      | Some path ->
-        let ic = open_in path in
-        let n = in_channel_length ic in
-        let s = Bytes.create n in
-        really_input ic s 0 n;
-        close_in ic;
-        Bytes.to_string s
-      | None ->
-        let buf = Buffer.create 4096 in
-        (try
-           while true do
-             Buffer.add_char buf (input_char stdin)
-           done
-         with End_of_file -> ());
-        Buffer.contents buf
+      time "read file" (fun () ->
+        match input_source with
+        | Some path ->
+          let ic = open_in path in
+          let n = in_channel_length ic in
+          let s = Bytes.create n in
+          really_input ic s 0 n;
+          close_in ic;
+          Bytes.to_string s
+        | None ->
+          let buf = Buffer.create 4096 in
+          (try
+             while true do
+               Buffer.add_char buf (input_char stdin)
+             done
+           with End_of_file -> ());
+          Buffer.contents buf)
     in
-    let json = Yojson.Basic.from_string json_str in
-    let input = Jx.Value.of_yojson json in
-    let ast = Jx.Parser.parse query_str in
-    let result = Jx.Interpreter.eval [] input ast in
+    let json = time "yojson parse" (fun () -> Yojson.Basic.from_string json_str) in
+    let input = time "of_yojson convert" (fun () -> Jx.Value.of_yojson json) in
+    let ast = time "parse query" (fun () -> Jx.Parser.parse query_str) in
+    let result = time "eval pipeline" (fun () -> Jx.Interpreter.eval [] input ast) in
     let output =
-      match (raw_output, result) with
-      | true, Jx.Value.String s -> s
-      | _ -> Jx.Printer.to_json ~compact result
+      time "output" (fun () ->
+        match (raw_output, result) with
+        | true, Jx.Value.String s -> s
+        | _ -> Jx.Printer.to_json ~compact result)
     in
-    print_string output;
-    print_newline ();
+    time "print" (fun () ->
+      print_string output;
+      print_newline ());
     0
   with
   | Jx.Error.Jx_error err ->
