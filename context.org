@@ -15,7 +15,7 @@ competed on runtime. jx competes on language design.
 =~/dev/sandbox/jx/=
 
 ** Status
-Working prototype. 44/44 tests passing. CLI functional.
+Working prototype. 52/52 tests passing. CLI functional.
 Performance: 1.4-1.7x slower than jq at scale (down from 3.3x).
 
 ** Core Design Rules
@@ -31,8 +31,8 @@ jx 'items | where .price > 100 | map {name, price}' data.json
   ┌────────┐    ┌────────┐    ┌─────┐    ┌─────────────┐    ┌────────┐
   │ Lexer  │ -> │ Parser │ -> │ AST │ -> │ Interpreter │ -> │ Output │
   └────────┘    └────────┘    └─────┘    └─────────────┘    └────────┘
-   sedlex       recursive                  transducer        direct
-   238 lines    457 lines     58 lines     pipelines         printer
+   sedlex       Pratt                      transducer        direct
+   245 lines    379 lines     58 lines     pipelines         printer
 #+end_src
 
 ** Module Dependency Graph
@@ -62,20 +62,20 @@ and =Stdlib_fns=. Interpreter calls stdlib via the ref; =Stdlib_fns= calls
 | File               | Lines | Purpose                              |
 |--------------------+-------+--------------------------------------|
 | lib/ast.ml         |    58 | Expression types, 17 AST constructors |
-| lib/lexer.ml       |   238 | sedlex tokenizer, string interpolation |
-| lib/parser.ml      |   457 | Recursive descent, precedence climbing |
+| lib/lexer.ml       |   245 | sedlex tokenizer with token spans     |
+| lib/parser.ml      |   379 | Pratt parser with attached postfix syntax |
 | lib/interpreter.ml |   304 | Eval AST against JSON values          |
-| lib/stdlib_fns.ml  |   ~220 | 30+ built-in fns, transducer dispatch |
+| lib/stdlib_fns.ml  |   387 | 30+ built-in fns, transducer dispatch |
 | lib/value.ml       |   100 | Runtime values (JSON + Seq + Xd)      |
 | lib/transducer.ml  |    98 | Composable transducer primitives      |
 | lib/error.ml       |    57 | Structured errors with locations      |
-| lib/printer.ml     |   ~130 | Direct JSON printer (no Yojson)      |
-| bin/main.ml        |    ~80 | CLI with cmdliner, JX_PROFILE support |
-| test/test_jx.ml    |   298 | 44 test cases                        |
+| lib/printer.ml     |   153 | Direct JSON printer (no Yojson)       |
+| bin/main.ml        |    86 | CLI with cmdliner, JX_PROFILE support |
+| test/test_jx.ml    |   357 | 52 test cases                         |
 | bench/run.sh       |   ~180 | Hyperfine benchmark (jx vs jq vs qj) |
 | bench/bench_lazy.ml |  162 | Lazy/transducer memory benchmark     |
-| BENCHMARKS.org     |   ~160 | Benchmark results and analysis       |
-| PLAN.org           |   260 | Project plan with phases              |
+| BENCHMARKS.org     |   137 | Benchmark results and analysis        |
+| PLAN.org           |   259 | Project plan with phases              |
 
 * Performance Architecture
 
@@ -308,6 +308,13 @@ echo '[1,2,3,4,5]' | jx 'where . > 3'   # [4, 5]
 
 * Parser Details
 
+** Pratt Parser
+Expressions are parsed with a Pratt parser. Prefix parsing handles literals,
+unary operators, arrays/objects, =if=, =let=, lambdas, and root dot access.
+An infix binding-power table handles precedence and associativity for pipes and
+binary operators in one place, which removed most of the old recursive-descent
+boilerplate and fixed left-associativity bugs in =-=, =/=, =%=, and =++=.
+
 ** Precedence (low to high)
 1. pipe (=|=)
 2. or (=||=)
@@ -326,14 +333,21 @@ echo '[1,2,3,4,5]' | jx 'where . > 3'   # [4, 5]
 Bare identifiers are parsed as function calls. Arguments are collected until
 a terminator token (=|=, =,=, =)=, =]=, =}=, =;=, =EOF=, =then=, =else=, =in=).
 
-Semicolons separate function arguments: =sort_by .price; .name=
+Whitespace separates implicit function arguments:
+=pick .name .email=. Semicolons are also accepted as explicit separators:
+=pick .name; .email=.
+
+Postfix operators bind only when attached to the preceding expression:
+- =.items[0].name= is a single chained expression
+- =.items [0]= is =.items= followed by a separate =[0]= expression
+- =.name?= works, =.name ?= does not
 
 If ==>= follows an identifier, it's parsed as a lambda: =x => x.name=
 
 ** String Interpolation Parsing
 =INTERP_STRING= tokens contain =Lit= and =Expr= parts. The parser creates a
-sub-parser state for each =Expr= part's source string and calls =parse_expr=
-on it. This means full expression syntax works inside =${...}=.
+sub-parser for each =Expr= part's source string by calling =parse= recursively.
+This means full expression syntax works inside =${...}=.
 
 * Interpreter Details
 
@@ -389,6 +403,7 @@ function names. If no close match, lists all available options.
 - =split= only works on single-character separators (=String.split_on_char=)
 - Negative number literals parse as unary minus (works for math, fails in =take -1=)
 - No multiline comments
+- Function calls are still bare-identifier based; no parenthesized/comma call syntax yet
 
 ** Interpreter
 - =dispatch_ref= mutable is a hack for cyclic dependency
@@ -400,11 +415,10 @@ Not implemented (mentioned in plan):
 - =replace=, =starts_with=, =ends_with=, =contains=
 - =flatten= with depth control
 - =find= (first match), =some= (any match?), =partition=
-- =pick= / =omit= arg parsing is fragile (expects AST field nodes)
 
 ** Error Messages
-- Location tracking is approximate — positions don't always propagate correctly
-- Caret pointer sometimes misaligned for multi-token expressions
+- Parse errors now use token spans, but interpolation subexpressions still
+  report positions relative to the nested snippet
 - Unknown function with Levenshtein > 3 dumps all function names (noisy)
 
 ** CLI
@@ -414,7 +428,7 @@ Not implemented (mentioned in plan):
 - No inline JSON as second positional arg
 
 ** Tests
-- 44 tests (33 core + 11 lazy sequence tests)
+- 52 tests (41 core/collections/strings/null + 11 lazy sequence tests)
 - Lazy tests include a proof-of-laziness test (skips 1M elements, would hang if eager)
 - No error case tests beyond strict null
 - No edge cases: empty arrays, unicode, large numbers, deeply nested objects
@@ -492,13 +506,13 @@ jx  'keys'              # ["b", "a"] (insertion order)
 
 * Prior Art Reference
 
-| Tool       | Language | Approach                          | Syntax Change? |
-|------------+----------+-----------------------------------+----------------|
-| jq         | C        | The original                      | —              |
-| query-json | OCaml    | Better names, strict nulls, REPL  | Minimal        |
-| jaq        | Rust     | Fastest clone, multi-format I/O   | No             |
-| gojq       | Go       | Arbitrary precision, embeddable   | No             |
-| fq         | Go       | Binary formats (150+)             | No             |
+| Tool       | Language | Approach                         | Syntax Change? |
+|------------+----------+----------------------------------+----------------|
+| jq         | C        | The original                     | —              |
+| query-json | OCaml    | Better names, strict nulls, REPL | Minimal        |
+| jaq        | Rust     | Fastest clone, multi-format I/O  | No             |
+| gojq       | Go       | Arbitrary precision, embeddable  | No             |
+| fq         | Go       | Binary formats (150+)            | No             |
 | *jx*       | OCaml    | *New query language*              | *Yes*          |
 
 query-json source at =~/repos/query-json/= — used as reference for:
