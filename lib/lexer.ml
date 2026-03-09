@@ -32,6 +32,7 @@ type token =
   | ASSIGN (* = *)
   | FAT_ARROW (* => *)
   | INT of int
+  | BIGINT of Z.t
   | FLOAT of float
   | STRING of string
   | INTERP_STRING of interp_part list
@@ -78,6 +79,7 @@ let token_to_string = function
   | ASSIGN -> "="
   | FAT_ARROW -> "=>"
   | INT i -> string_of_int i
+  | BIGINT z -> Z.to_string z
   | FLOAT f -> string_of_float f
   | STRING s -> Printf.sprintf "%S" s
   | INTERP_STRING _ -> "<interp_string>"
@@ -158,7 +160,13 @@ let tokenize (input : string) : positioned_token list =
       add (FLOAT (float_of_string (Sedlexing.Utf8.lexeme buf)));
       scan ()
     | Plus ('0' .. '9') ->
-      add (INT (int_of_string (Sedlexing.Utf8.lexeme buf)));
+      let raw = Sedlexing.Utf8.lexeme buf in
+      let token =
+        match int_of_string_opt raw with
+        | Some i -> INT i
+        | None -> BIGINT (Z.of_string raw)
+      in
+      add token;
       scan ()
     | '"' ->
       let parts = scan_interp_string (Buffer.create 64) [] in

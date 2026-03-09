@@ -13,8 +13,25 @@ let time label f =
     result)
   else f ()
 
+let streamable_root_fn = function
+  | "where" | "map" | "unique" | "flatten" | "take" | "skip"
+  | "sort_by" | "group_by" | "reverse" | "first" | "last"
+  | "count" | "length" | "sum" | "min" | "max" | "avg" ->
+    true
+  | _ -> false
+
+let rec supports_simdjson_top_array_path (expr : Jx.Ast.expr) =
+  match expr with
+  | Identity -> true
+  | FnCall { name; _ } -> streamable_root_fn name
+  | Pipe { left; right } ->
+    supports_simdjson_top_array_path left
+    && supports_simdjson_top_array_path right
+  | _ -> false
+
 let run query_str input_source raw_output compact =
   try
+    let ast = time "parse query" (fun () -> Jx.Parser.parse query_str) in
     let json_str =
       time "read file" (fun () ->
         match input_source with
@@ -34,9 +51,16 @@ let run query_str input_source raw_output compact =
            with End_of_file -> ());
           Buffer.contents buf)
     in
-    let json = time "yojson parse" (fun () -> Yojson.Basic.from_string json_str) in
-    let input = time "of_yojson convert" (fun () -> Jx.Value.of_yojson json) in
-    let ast = time "parse query" (fun () -> Jx.Parser.parse query_str) in
+    let input =
+      if supports_simdjson_top_array_path ast then
+        try
+          time "simdjson top-array init" (fun () ->
+            Jx.Simdjson_stream.top_array_input json_str)
+        with Failure _ ->
+          time "simdjson parse" (fun () -> Jx.Simdjson_native.parse_value json_str)
+      else
+        time "simdjson parse" (fun () -> Jx.Simdjson_native.parse_value json_str)
+    in
     let result = time "eval pipeline" (fun () -> Jx.Interpreter.eval [] input ast) in
     let output =
       time "output" (fun () ->
@@ -52,11 +76,16 @@ let run query_str input_source raw_output compact =
   | Jx.Error.Jx_error err ->
     Printf.eprintf "%s%!" (Jx.Error.format_error err query_str);
     1
-  | Yojson.Json_error msg ->
-    Printf.eprintf "error[json]: %s\n" msg;
-    1
   | Failure msg ->
-    Printf.eprintf "error: %s\n" msg;
+    let prefix = "json: " in
+    if String.length msg >= String.length prefix
+       && String.sub msg 0 (String.length prefix) = prefix
+    then
+      Printf.eprintf "error[json]: %s\n"
+        (String.sub msg (String.length prefix)
+           (String.length msg - String.length prefix))
+    else
+      Printf.eprintf "error: %s\n" msg;
     1
 
 open Cmdliner

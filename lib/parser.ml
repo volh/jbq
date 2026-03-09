@@ -183,6 +183,9 @@ and parse_prefix st =
   | Lexer.INT i ->
     ignore (advance st);
     Ast.Literal (Int i)
+  | Lexer.BIGINT z ->
+    ignore (advance st);
+    Ast.Literal (BigInt z)
   | Lexer.FLOAT f ->
     ignore (advance st);
     Ast.Literal (Float f)

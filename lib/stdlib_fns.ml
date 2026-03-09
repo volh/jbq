@@ -6,6 +6,7 @@ type unique_key =
   | KNull
   | KBool of bool
   | KInt of int
+  | KBigInt of string
   | KFloat of int64
   | KString of string
   | KArray of unique_key list
@@ -16,6 +17,7 @@ let rec unique_key_of_value value =
   | Value.Null -> KNull
   | Value.Bool b -> KBool b
   | Value.Int i -> KInt i
+  | Value.BigInt z -> KBigInt (Z.to_string z)
   | Value.Float f -> KFloat (Int64.bits_of_float f)
   | Value.String s -> KString s
   | Value.Array xs -> KArray (List.map unique_key_of_value xs)
@@ -174,8 +176,13 @@ let dispatch env input name args loc =
       (fun acc item ->
         match (acc, item) with
         | Value.Int a, Value.Int b -> Value.Int (a + b)
+        | Value.Int a, Value.BigInt b -> Value.of_z (Z.add (Z.of_int a) b)
         | Value.Int a, Value.Float b -> Value.Float (Float.of_int a +. b)
+        | Value.BigInt a, Value.Int b -> Value.of_z (Z.add a (Z.of_int b))
+        | Value.BigInt a, Value.BigInt b -> Value.of_z (Z.add a b)
+        | Value.BigInt a, Value.Float b -> Value.Float (Z.to_float a +. b)
         | Value.Float a, Value.Int b -> Value.Float (a +. Float.of_int b)
+        | Value.Float a, Value.BigInt b -> Value.Float (a +. Z.to_float b)
         | Value.Float a, Value.Float b -> Value.Float (a +. b)
         | _ ->
           Error.raise_ ~loc Type_mismatch "sum requires numeric elements")
@@ -334,10 +341,27 @@ let dispatch env input name args loc =
   | "to_number", [] -> (
     match input with
     | Value.Int _ | Value.Float _ -> input
+    | Value.BigInt _ -> input
     | Value.String s -> (
-      match int_of_string_opt s with
-      | Some i -> Value.Int i
-      | None -> (
+      let integer_like =
+        let len = String.length s in
+        len > 0
+        &&
+        let rec loop i =
+          if i >= len then true
+          else
+            match s.[i] with
+            | '0' .. '9' -> loop (i + 1)
+            | _ -> false
+        in
+        match s.[0] with
+        | '-' | '+' -> len > 1 && loop 1
+        | '0' .. '9' -> loop 0
+        | _ -> false
+      in
+      if integer_like then
+        Value.of_z (Z.of_string s)
+      else (
         match float_of_string_opt s with
         | Some f -> Value.Float f
         | None ->

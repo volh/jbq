@@ -3,11 +3,131 @@ let () =
   Jx.Value.xd_run_ref := Jx.Transducer.run
 
 let eval_str query json_str =
-  let json = Yojson.Basic.from_string json_str in
-  let input = Jx.Value.of_yojson json in
+  let input = Jx.Simdjson_native.parse_value json_str in
   let ast = Jx.Parser.parse query in
   let result = Jx.Interpreter.eval [] input ast in
   Jx.Printer.to_json ~compact:true result
+
+let eval_stream_str query json_str =
+  let input = Jx.Simdjson_stream.top_array_input json_str in
+  let ast = Jx.Parser.parse query in
+  let result = Jx.Interpreter.eval [] input ast in
+  Jx.Printer.to_json ~compact:true result
+
+let test_simdjson_available () =
+  Alcotest.(check bool) "simdjson available" true (Jx.Simdjson_native.available ())
+
+let test_simdjson_version () =
+  Alcotest.(check bool) "simdjson version non-empty" true
+    (String.length (Jx.Simdjson_native.version ()) > 0)
+
+let test_simdjson_top_array_elements_raw () =
+  Alcotest.(check (list string))
+    "top array raw elements"
+    [ {|{"a":1}|}; {|[2,3]|}; {|4|} ]
+    (Jx.Simdjson_native.top_array_elements_raw {|[{"a":1},[2,3],4]|})
+
+let test_simdjson_top_array_rejects_non_array () =
+  Alcotest.(check bool) "top array rejects non-array" true
+    (try
+       ignore (Jx.Simdjson_native.top_array_elements_raw {|{"a":1}|});
+       false
+     with Failure _ -> true)
+
+let test_simdjson_top_array_value_seq () =
+  let values =
+    Jx.Simdjson_stream.top_array_value_seq {|[{"a":1},[2,3],4]|}
+    |> List.of_seq
+    |> List.map (Jx.Printer.to_json ~compact:true)
+  in
+  Alcotest.(check (list string))
+    "top array value seq"
+    [ {|{"a":1}|}; "[2,3]"; "4" ]
+    values
+
+let test_simdjson_parse_value () =
+  Alcotest.(check string)
+    "parse value nested"
+    {|{"a":[1,2,{"b":true}],"c":null,"d":"x"}|}
+    (Jx.Simdjson_native.parse_value
+       {|{"a":[1,2,{"b":true}],"c":null,"d":"x"}|}
+    |> Jx.Printer.to_json ~compact:true)
+
+let test_simdjson_stream_where_take () =
+  Alcotest.(check string)
+    "streamed where | take"
+    {|[{"name":"B","price":200}]|}
+    (eval_stream_str "where .price > 100 | take 1"
+       {|[{"name":"A","price":50},{"name":"B","price":200}]|})
+
+let test_simdjson_stream_count () =
+  Alcotest.(check string)
+    "streamed count"
+    "3"
+    (eval_stream_str "count" "[1,2,3]")
+
+let test_simdjson_stream_map () =
+  Alcotest.(check string)
+    "streamed map"
+    {|["A","B"]|}
+    (eval_stream_str "map .name" {|[{"name":"A"},{"name":"B"}]|})
+
+let test_simdjson_stream_take () =
+  Alcotest.(check string)
+    "streamed take"
+    "[1,2]"
+    (eval_stream_str "take 2" "[1,2,3]")
+
+let test_simdjson_stream_skip () =
+  Alcotest.(check string)
+    "streamed skip"
+    "[3]"
+    (eval_stream_str "skip 2" "[1,2,3]")
+
+let test_simdjson_stream_unique () =
+  Alcotest.(check string)
+    "streamed unique"
+    "[1,2,3]"
+    (eval_stream_str "unique" "[1,2,1,3,2]")
+
+let test_simdjson_stream_sort_by () =
+  Alcotest.(check string)
+    "streamed sort_by"
+    {|[{"n":"A","p":10},{"n":"B","p":20}]|}
+    (eval_stream_str "sort_by .p"
+       {|[{"n":"B","p":20},{"n":"A","p":10}]|})
+
+let test_simdjson_stream_group_by () =
+  Alcotest.(check string)
+    "streamed group_by"
+    {|{"a":[{"t":"a","v":1},{"t":"a","v":2}],"b":[{"t":"b","v":3}]}|}
+    (eval_stream_str "group_by .t"
+       {|[{"t":"a","v":1},{"t":"b","v":3},{"t":"a","v":2}]|})
+
+let test_simdjson_stream_reverse () =
+  Alcotest.(check string)
+    "streamed reverse"
+    "[3,2,1]"
+    (eval_stream_str "reverse" "[1,2,3]")
+
+let test_simdjson_stream_first () =
+  Alcotest.(check string)
+    "streamed first"
+    "1"
+    (eval_stream_str "first" "[1,2,3]")
+
+let test_simdjson_stream_last () =
+  Alcotest.(check string)
+    "streamed last"
+    "3"
+    (eval_stream_str "last" "[1,2,3]")
+
+let test_simdjson_stream_where_map_count () =
+  Alcotest.(check string)
+    "streamed where | map | count"
+    "2"
+    (eval_stream_str "where .price > 100 | map .name | count"
+       {|[{"name":"A","price":50},{"name":"B","price":200},{"name":"C","price":300}]|})
 
 let test_identity () =
   Alcotest.(check string) "identity" "42" (eval_str "." "42")
@@ -124,6 +244,48 @@ let test_skip () =
 let test_sum () =
   Alcotest.(check string) "sum" "15" (eval_str "sum" "[1,2,3,4,5]")
 
+let test_bigint_parse_exact () =
+  Alcotest.(check string)
+    "bigint parse exact"
+    "9223372036854775808"
+    (eval_str ".n" {|{"n":9223372036854775808}|})
+
+let test_huge_bigint_parse_exact () =
+  Alcotest.(check string)
+    "huge bigint parse exact"
+    "1844674407370955161612345"
+    (eval_str ".n" {|{"n":1844674407370955161612345}|})
+
+let test_negative_bigint_parse_exact () =
+  Alcotest.(check string)
+    "negative bigint parse exact"
+    "-9223372036854775809"
+    (eval_str ".n" {|{"n":-9223372036854775809}|})
+
+let test_bigint_query_add_exact () =
+  Alcotest.(check string)
+    "bigint query add exact"
+    "9223372036854775809"
+    (eval_str "9223372036854775808 + 1" "null")
+
+let test_bigint_query_mul_exact () =
+  Alcotest.(check string)
+    "bigint query mul exact"
+    "92233720368547758080"
+    (eval_str "9223372036854775808 * 10" "null")
+
+let test_bigint_sum_exact () =
+  Alcotest.(check string)
+    "bigint sum exact"
+    "9223372036854775809"
+    (eval_str "sum" "[9223372036854775808,1]")
+
+let test_bigint_distinct_eq () =
+  Alcotest.(check string)
+    "bigint equality stays distinct"
+    "false"
+    (eval_str "9223372036854775808 == 9223372036854775809" "null")
+
 let test_keys () =
   Alcotest.(check string)
     "keys preserves order" {|["b","a"]|}
@@ -147,6 +309,34 @@ let test_optional_field () =
   Alcotest.(check string)
     "optional field" "null"
     (eval_str ".missing?" {|{"name": "Alice"}|})
+
+let test_unicode_and_escaped_keys () =
+  let musical = "\240\157\132\158" in
+  Alcotest.(check string)
+    "unicode and escaped keys"
+    (Printf.sprintf
+       {|{"s":"hello\nworld","k\"y":1,"u":"Привіт","e":"é","m":"%s"}|} musical)
+    (eval_str "."
+       {|{"s":"hello\nworld","k\"y":1,"u":"Привіт","e":"é","m":"\uD834\uDD1E"}|})
+
+let test_malformed_json_errors () =
+  Alcotest.(check bool) "malformed json errors" true
+    (try
+       ignore (Jx.Simdjson_native.parse_value {|{"a":|});
+       false
+     with Failure _ -> true)
+
+let test_deep_array_roundtrip () =
+  let rec build n acc = if n = 0 then acc else build (n - 1) ("[" ^ acc ^ "]") in
+  let json = build 200 "[]" in
+  Alcotest.(check string) "deep array roundtrip" json (eval_str "." json)
+
+let test_deep_object_roundtrip () =
+  let rec build n acc =
+    if n = 0 then acc else build (n - 1) ("{\"k\":" ^ acc ^ "}")
+  in
+  let json = build 200 "{}" in
+  Alcotest.(check string) "deep object roundtrip" json (eval_str "." json)
 
 let test_strict_null () =
   Alcotest.(check bool) "strict null errors" true
@@ -287,6 +477,27 @@ let test_lazy_no_realization () =
 let () =
   Alcotest.run "jx"
     [
+      ( "simdjson",
+        [
+          Alcotest.test_case "available" `Quick test_simdjson_available;
+          Alcotest.test_case "version" `Quick test_simdjson_version;
+          Alcotest.test_case "top array elements raw" `Quick test_simdjson_top_array_elements_raw;
+          Alcotest.test_case "top array rejects non-array" `Quick test_simdjson_top_array_rejects_non_array;
+          Alcotest.test_case "top array value seq" `Quick test_simdjson_top_array_value_seq;
+          Alcotest.test_case "parse value" `Quick test_simdjson_parse_value;
+          Alcotest.test_case "stream where take" `Quick test_simdjson_stream_where_take;
+          Alcotest.test_case "stream count" `Quick test_simdjson_stream_count;
+          Alcotest.test_case "stream map" `Quick test_simdjson_stream_map;
+          Alcotest.test_case "stream take" `Quick test_simdjson_stream_take;
+          Alcotest.test_case "stream skip" `Quick test_simdjson_stream_skip;
+          Alcotest.test_case "stream unique" `Quick test_simdjson_stream_unique;
+          Alcotest.test_case "stream sort_by" `Quick test_simdjson_stream_sort_by;
+          Alcotest.test_case "stream group_by" `Quick test_simdjson_stream_group_by;
+          Alcotest.test_case "stream reverse" `Quick test_simdjson_stream_reverse;
+          Alcotest.test_case "stream first" `Quick test_simdjson_stream_first;
+          Alcotest.test_case "stream last" `Quick test_simdjson_stream_last;
+          Alcotest.test_case "stream where map count" `Quick test_simdjson_stream_where_map_count;
+        ] );
       ( "core",
         [
           Alcotest.test_case "identity" `Quick test_identity;
@@ -306,6 +517,13 @@ let () =
           Alcotest.test_case "array index" `Quick test_array_index;
           Alcotest.test_case "negative index" `Quick test_negative_index;
           Alcotest.test_case "slice" `Quick test_slice;
+          Alcotest.test_case "bigint parse exact" `Quick test_bigint_parse_exact;
+          Alcotest.test_case "huge bigint parse exact" `Quick test_huge_bigint_parse_exact;
+          Alcotest.test_case "negative bigint parse exact" `Quick test_negative_bigint_parse_exact;
+          Alcotest.test_case "bigint query add" `Quick test_bigint_query_add_exact;
+          Alcotest.test_case "bigint query mul" `Quick test_bigint_query_mul_exact;
+          Alcotest.test_case "bigint sum" `Quick test_bigint_sum_exact;
+          Alcotest.test_case "bigint distinct eq" `Quick test_bigint_distinct_eq;
         ] );
       ( "objects",
         [
@@ -346,6 +564,13 @@ let () =
         [
           Alcotest.test_case "optional field" `Quick test_optional_field;
           Alcotest.test_case "strict null" `Quick test_strict_null;
+        ] );
+      ( "json parser",
+        [
+          Alcotest.test_case "unicode and escaped keys" `Quick test_unicode_and_escaped_keys;
+          Alcotest.test_case "malformed json" `Quick test_malformed_json_errors;
+          Alcotest.test_case "deep array roundtrip" `Quick test_deep_array_roundtrip;
+          Alcotest.test_case "deep object roundtrip" `Quick test_deep_object_roundtrip;
         ] );
       ( "lazy sequences",
         [

@@ -47,6 +47,7 @@ and eval_literal = function
   | Null -> Value.Null
   | Bool b -> Value.Bool b
   | Int i -> Value.Int i
+  | BigInt z -> Value.of_z z
   | Float f -> Value.Float f
   | String s -> Value.String s
 
@@ -169,19 +170,19 @@ and eval_binop env input op left right loc =
 
 and eval_binop_values op lv rv loc =
   match op with
-  | Add -> numeric_op ( + ) ( +. ) lv rv loc
-  | Sub -> numeric_op ( - ) ( -. ) lv rv loc
-  | Mul -> numeric_op ( * ) ( *. ) lv rv loc
+  | Add -> numeric_op Z.add ( +. ) lv rv loc
+  | Sub -> numeric_op Z.sub ( -. ) lv rv loc
+  | Mul -> numeric_op Z.mul ( *. ) lv rv loc
   | Div -> (
-    match (lv, rv) with
-    | Value.Int _, Value.Int 0 ->
+    match int_like_to_z rv with
+    | Some z when Z.equal z Z.zero ->
       Error.raise_ ~loc Runtime_error "division by zero"
-    | _ -> numeric_op ( / ) ( /. ) lv rv loc)
+    | _ -> div_op lv rv loc)
   | Mod -> (
-    match (lv, rv) with
-    | Value.Int a, Value.Int b ->
-      if b = 0 then Error.raise_ ~loc Runtime_error "modulo by zero"
-      else Value.Int (a mod b)
+    match (int_like_to_z lv, int_like_to_z rv) with
+    | Some _, Some z when Z.equal z Z.zero ->
+      Error.raise_ ~loc Runtime_error "modulo by zero"
+    | Some a, Some b -> Value.of_z (Z.rem a b)
     | _ -> Error.raise_ ~loc Type_mismatch "% requires integers")
   | Eq -> Value.Bool (value_eq lv rv)
   | Neq -> Value.Bool (not (value_eq lv rv))
@@ -204,25 +205,53 @@ and eval_binop_values op lv rv loc =
     (* handled above with short-circuit *)
     assert false
 
+and int_like_to_z = function
+  | Value.Int i -> Some (Z.of_int i)
+  | Value.BigInt z -> Some z
+  | _ -> None
+
+and float_like = function
+  | Value.Int i -> Some (Float.of_int i)
+  | Value.BigInt z -> Some (Z.to_float z)
+  | Value.Float f -> Some f
+  | _ -> None
+
 and numeric_op int_op float_op lv rv loc =
-  match (lv, rv) with
-  | Value.Int a, Value.Int b -> Value.Int (int_op a b)
-  | Value.Int a, Value.Float b -> Value.Float (float_op (Float.of_int a) b)
-  | Value.Float a, Value.Int b -> Value.Float (float_op a (Float.of_int b))
-  | Value.Float a, Value.Float b -> Value.Float (float_op a b)
-  | _ ->
-    Error.raise_ ~loc Type_mismatch
-      (Printf.sprintf "arithmetic requires numbers, got %s and %s"
-         (Value.type_name lv) (Value.type_name rv))
+  match (int_like_to_z lv, int_like_to_z rv) with
+  | Some a, Some b -> Value.of_z (int_op a b)
+  | _ -> (
+    match (float_like lv, float_like rv) with
+    | Some a, Some b -> Value.Float (float_op a b)
+    | _ ->
+      Error.raise_ ~loc Type_mismatch
+        (Printf.sprintf "arithmetic requires numbers, got %s and %s"
+           (Value.type_name lv) (Value.type_name rv)))
+
+and div_op lv rv loc =
+  match (int_like_to_z lv, int_like_to_z rv) with
+  | Some a, Some b -> Value.of_z (Z.div a b)
+  | _ -> (
+    match (float_like lv, float_like rv) with
+    | Some _, Some 0.0 -> Error.raise_ ~loc Runtime_error "division by zero"
+    | Some a, Some b -> Value.Float (a /. b)
+    | _ ->
+      Error.raise_ ~loc Type_mismatch
+        (Printf.sprintf "arithmetic requires numbers, got %s and %s"
+           (Value.type_name lv) (Value.type_name rv)))
 
 and value_eq a b =
   match (a, b) with
   | Value.Null, Value.Null -> true
   | Value.Bool a, Value.Bool b -> a = b
   | Value.Int a, Value.Int b -> a = b
+  | Value.BigInt a, Value.BigInt b -> Z.equal a b
+  | Value.Int a, Value.BigInt b -> Z.equal (Z.of_int a) b
+  | Value.BigInt a, Value.Int b -> Z.equal a (Z.of_int b)
   | Value.Float a, Value.Float b -> Float.equal a b
   | Value.Int a, Value.Float b -> Float.equal (Float.of_int a) b
   | Value.Float a, Value.Int b -> Float.equal a (Float.of_int b)
+  | Value.BigInt a, Value.Float b -> Float.equal (Z.to_float a) b
+  | Value.Float a, Value.BigInt b -> Float.equal a (Z.to_float b)
   | Value.String a, Value.String b -> String.equal a b
   | Value.Array a, Value.Array b ->
     List.length a = List.length b && List.for_all2 value_eq a b
@@ -238,9 +267,14 @@ and value_compare a b =
   | Value.Null, Value.Null -> 0
   | Value.Bool a, Value.Bool b -> compare a b
   | Value.Int a, Value.Int b -> compare a b
+  | Value.BigInt a, Value.BigInt b -> Z.compare a b
+  | Value.Int a, Value.BigInt b -> Z.compare (Z.of_int a) b
+  | Value.BigInt a, Value.Int b -> Z.compare a (Z.of_int b)
   | Value.Float a, Value.Float b -> Float.compare a b
   | Value.Int a, Value.Float b -> Float.compare (Float.of_int a) b
   | Value.Float a, Value.Int b -> Float.compare a (Float.of_int b)
+  | Value.BigInt a, Value.Float b -> Float.compare (Z.to_float a) b
+  | Value.Float a, Value.BigInt b -> Float.compare a (Z.to_float b)
   | Value.String a, Value.String b -> String.compare a b
   | _ -> compare (Value.type_name a) (Value.type_name b)
 
@@ -249,12 +283,12 @@ and value_to_string = function
   | Value.Bool true -> "true"
   | Value.Bool false -> "false"
   | Value.Int i -> string_of_int i
+  | Value.BigInt z -> Z.to_string z
   | Value.Float f ->
     let s = Printf.sprintf "%.17g" f in
     s
   | Value.String s -> s
-  | other ->
-    Yojson.Basic.to_string (Value.to_yojson other)
+  | other -> Printer.to_json ~compact:true other
 
 and eval_object env input fields =
   let kvs =

@@ -1,5 +1,12 @@
 (library
  (name jx)
- (libraries yojson sedlex)
+ (libraries sedlex zarith)
+ (foreign_stubs
+  (language cxx)
+  (names simdjson_stubs)
+  (flags
+   (:standard -std=c++17)))
+ (c_library_flags
+  (-lsimdjson -lstdc++))
  (preprocess
   (pps sedlex.ppx)))

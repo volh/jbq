@@ -24,6 +24,7 @@ and literal =
   | Null
   | Bool of bool
   | Int of int
+  | BigInt of Z.t
   | Float of float
   | String of string
 

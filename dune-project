@@ -24,7 +24,7 @@
   (dune (>= 3.17))
   (cmdliner (>= 1.3.0))
   sedlex
-  (yojson (>= 2.0))
+  zarith
   (alcotest :with-test)
   (ocamlformat
    (and

@@ -3,8 +3,7 @@ let () =
   Jx.Value.xd_run_ref := Jx.Transducer.run
 
 let run query json_str =
-  let json = Yojson.Basic.from_string json_str in
-  let input = Jx.Value.of_yojson json in
+  let input = Jx.Simdjson_native.parse_value json_str in
   let ast = Jx.Parser.parse query in
   Jx.Interpreter.eval [] input ast
 
@@ -14,9 +13,7 @@ let run_preparse query input =
   let ast = Jx.Parser.parse query in
   Jx.Interpreter.eval [] input ast
 
-let preparse json_str =
-  let json = Yojson.Basic.from_string json_str in
-  Jx.Value.of_yojson json
+let preparse json_str = Jx.Simdjson_native.parse_value json_str
 
 let time_it label f =
   Gc.compact ();

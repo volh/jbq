@@ -1,0 +1,330 @@
+#+TITLE: simdjson Spike Claim Audit
+#+DATE: 2026-03-09
+
+* Scope
+
+This document verifies the claims around the =simdjson-spike= branch.
+
+Compared revisions:
+- =jq= version: =jq-1.8.1=
+- =jx baseline=: commit =52f3623= (=main=)
+- =jx simdjson=: commit =f8c1562= (=simdjson-spike=)
+
+Raw artifacts are stored under:
+=audit/simdjson-claim-audit/=
+
+* Verdicts
+
+- Claim: the branch fully removed Yojson from the repository.
+  Verdict: *false*.
+
+- Claim: the experimental CLI input path no longer uses Yojson when
+  =JX_EXPERIMENTAL_SIMDJSON_TOP_ARRAY=1= is enabled.
+  Verdict: *true*, based on code and profile output.
+
+- Claim: the branch meaningfully improves the targeted workloads over =jx main=.
+  Verdict: *true*.
+
+- Claim: the branch beats =jq= on the tested streamed/reduction workloads.
+  Verdict: *true* for the tested commands below.
+
+- Claim: the branch beats =jq= on identity.
+  Verdict: *false*.
+  It is close, but =jq= is still slightly faster on identity in this audit.
+
+* Where Yojson Still Exists
+
+This is the direct grep output from the branch:
+
+#+begin_src text
+test/test_jx.ml:6:  let json = Yojson.Basic.from_string json_str in
+test/test_jx.ml:7:  let input = Jx.Value.of_yojson json in
+bin/main.ml:69:        let json = time "yojson parse" (fun () -> Yojson.Basic.from_string json_str) in
+bin/main.ml:70:        time "of_yojson convert" (fun () -> Jx.Value.of_yojson json)
+bin/main.ml:87:  | Yojson.Json_error msg ->
+lib/dune:3: (libraries yojson sedlex)
+lib/interpreter.ml:257:    Yojson.Basic.to_string (Value.to_yojson other)
+lib/value.ml:36:let rec of_yojson : Yojson.Basic.t -> t = function
+lib/value.ml:42:  | `List xs -> Array (List.map of_yojson xs)
+lib/value.ml:43:  | `Assoc kvs -> Object (List.map (fun (k, v) -> (k, of_yojson v)) kvs)
+lib/value.ml:54:let rec to_yojson : t -> Yojson.Basic.t = function
+lib/value.ml:60:  | Array xs -> `List (List.map to_yojson xs)
+lib/value.ml:61:  | Object kvs -> `Assoc (List.map (fun (k, v) -> (k, to_yojson v)) kvs)
+lib/value.ml:62:  | Seq s -> `List (List.map to_yojson (List.of_seq s))
+lib/value.ml:64:    `List (List.map to_yojson (!xd_run_ref xd (to_seq_of source)))
+#+end_src
+
+Conclusion:
+- Yojson is still in the repo.
+- Yojson is still the default input path when the experimental env var is *not* set.
+- Yojson is still used in tests and output-related helpers.
+
+* Code Path Audit
+
+Current branch CLI input selection:
+[bin/main.ml](/home/roman/dev/sandbox/jx/bin/main.ml#L59)
+
+#+begin_src text
+    let input =
+      if simdjson_top_array && supports_simdjson_top_array_path ast then
+        try
+          time "simdjson top-array init" (fun () ->
+            Jx.Simdjson_stream.top_array_input json_str)
+        with Failure _ ->
+          time "simdjson parse" (fun () -> Jx.Simdjson_native.parse_value json_str)
+      else if simdjson_top_array then
+        time "simdjson parse" (fun () -> Jx.Simdjson_native.parse_value json_str)
+      else
+        let json = time "yojson parse" (fun () -> Yojson.Basic.from_string json_str) in
+        time "of_yojson convert" (fun () -> Jx.Value.of_yojson json)
+#+end_src
+
+Baseline main CLI input path:
+[bin/main.ml](/tmp/jx-main/bin/main.ml#L37)
+
+#+begin_src text
+    let json = time "yojson parse" (fun () -> Yojson.Basic.from_string json_str) in
+    let input = time "of_yojson convert" (fun () -> Jx.Value.of_yojson json) in
+#+end_src
+
+Conclusion:
+- The *experimental* CLI path on this branch does replace Yojson input parsing.
+- The *repository* does not fully remove Yojson.
+
+* Profile Verification
+
+** Experimental simdjson fallback on a non-array input
+
+Command:
+
+#+begin_src shell
+JX_PROFILE=1 env JX_EXPERIMENTAL_SIMDJSON_TOP_ARRAY=1 \
+  _build/default/bin/main.exe '.name' /tmp/jx-small-object.json
+#+end_src
+
+Stdout:
+
+#+begin_src text
+"Alice"
+#+end_src
+
+Stderr:
+
+#+begin_src text
+  parse query                  0.015 ms
+  read file                    0.030 ms
+  simdjson parse               0.021 ms
+  eval pipeline                0.000 ms
+  output                       0.003 ms
+  print                        0.006 ms
+#+end_src
+
+This verifies that the branch can take the full =simdjson parse= path with no
+=yojson parse= / =of_yojson convert= stages.
+
+** Experimental simdjson top-array path
+
+Command:
+
+#+begin_src shell
+JX_PROFILE=1 env JX_EXPERIMENTAL_SIMDJSON_TOP_ARRAY=1 \
+  _build/default/bin/main.exe 'where .price > 400 | take 5' bench/data/xlarge.json
+#+end_src
+
+Stderr:
+
+#+begin_src text
+  parse query                  0.019 ms
+  read file                    6.876 ms
+  simdjson top-array init      7.553 ms
+  eval pipeline                0.002 ms
+  output                       0.035 ms
+  print                        0.006 ms
+#+end_src
+
+This verifies that the branch can take the streamed top-array path with no
+=yojson parse= / =of_yojson convert= stages.
+
+** Baseline main still uses Yojson
+
+Command:
+
+#+begin_src shell
+JX_PROFILE=1 /tmp/jx-main/_build/default/bin/main.exe 'count' bench/data/xlarge.json
+#+end_src
+
+Stdout:
+
+#+begin_src text
+100000
+#+end_src
+
+Stderr:
+
+#+begin_src text
+  read file                    6.704 ms
+  yojson parse               273.580 ms
+  of_yojson convert           92.875 ms
+  parse query                  0.011 ms
+  eval pipeline                0.493 ms
+  output                       0.002 ms
+  print                        0.006 ms
+#+end_src
+
+* Raw Benchmark Results
+
+All of the following are copied verbatim from files under
+=audit/simdjson-claim-audit/=.
+
+** where .price > 400 | take 5
+
+#+begin_src text
+Benchmark 1: jq
+  Time (mean ± σ):     236.6 ms ±   8.6 ms    [User: 202.3 ms, System: 32.8 ms]
+  Range (min … max):   224.9 ms … 250.8 ms    12 runs
+ 
+Benchmark 2: jx-main
+  Time (mean ± σ):     430.4 ms ±  12.2 ms    [User: 384.6 ms, System: 43.5 ms]
+  Range (min … max):   423.1 ms … 454.8 ms    6 runs
+ 
+Benchmark 3: jx-simdjson
+  Time (mean ± σ):      19.4 ms ±   1.3 ms    [User: 10.2 ms, System: 8.9 ms]
+  Range (min … max):    16.8 ms …  27.3 ms    167 runs
+ 
+Summary
+  jx-simdjson ran
+   12.17 ± 0.95 times faster than jq
+   22.14 ± 1.65 times faster than jx-main
+#+end_src
+
+** count
+
+#+begin_src text
+Benchmark 1: jq
+  Time (mean ± σ):     235.0 ms ±   6.4 ms    [User: 199.9 ms, System: 33.9 ms]
+  Range (min … max):   226.7 ms … 246.2 ms    12 runs
+ 
+Benchmark 2: jx-main
+  Time (mean ± σ):     432.1 ms ±  16.5 ms    [User: 380.3 ms, System: 49.6 ms]
+  Range (min … max):   414.2 ms … 461.1 ms    7 runs
+ 
+Benchmark 3: jx-simdjson
+  Time (mean ± σ):      69.8 ms ±   3.5 ms    [User: 59.9 ms, System: 9.2 ms]
+  Range (min … max):    63.8 ms …  79.3 ms    40 runs
+ 
+Summary
+  jx-simdjson ran
+    3.37 ± 0.19 times faster than jq
+    6.19 ± 0.39 times faster than jx-main
+#+end_src
+
+** map .price | sum
+
+#+begin_src text
+Benchmark 1: jq
+  Time (mean ± σ):     314.9 ms ±   6.3 ms    [User: 277.0 ms, System: 36.5 ms]
+  Range (min … max):   306.3 ms … 326.4 ms    9 runs
+ 
+Benchmark 2: jx-main
+  Time (mean ± σ):     445.5 ms ±  10.6 ms    [User: 392.9 ms, System: 49.2 ms]
+  Range (min … max):   436.4 ms … 462.8 ms    6 runs
+ 
+Benchmark 3: jx-simdjson
+  Time (mean ± σ):      82.3 ms ±   3.7 ms    [User: 71.7 ms, System: 9.8 ms]
+  Range (min … max):    76.0 ms …  90.1 ms    35 runs
+ 
+Summary
+  jx-simdjson ran
+    3.83 ± 0.19 times faster than jq
+    5.41 ± 0.28 times faster than jx-main
+#+end_src
+
+** identity
+
+#+begin_src text
+Benchmark 1: jq
+  Time (mean ± σ):     496.0 ms ±  18.6 ms    [User: 458.7 ms, System: 34.7 ms]
+  Range (min … max):   472.9 ms … 519.0 ms    5 runs
+ 
+Benchmark 2: jx-main
+  Time (mean ± σ):     806.5 ms ±  26.8 ms    [User: 740.0 ms, System: 62.0 ms]
+  Range (min … max):   766.8 ms … 829.1 ms    5 runs
+ 
+Benchmark 3: jx-simdjson
+  Time (mean ± σ):     500.8 ms ±   2.8 ms    [User: 465.1 ms, System: 33.5 ms]
+  Range (min … max):   497.7 ms … 504.9 ms    5 runs
+ 
+Summary
+  jq ran
+    1.01 ± 0.04 times faster than jx-simdjson
+    1.63 ± 0.08 times faster than jx-main
+#+end_src
+
+* Memory Usage Audit
+
+Measured with =/usr/bin/time -v=. Raw files are under:
+=audit/simdjson-claim-audit/memory/=
+
+Summary from the raw =time -v= output:
+
+#+begin_src text
+jq-take5:
+  Elapsed: 0:00.26
+  Max RSS: 98472 kbytes
+
+simdjson-take5:
+  Elapsed: 0:00.02
+  Max RSS: 55516 kbytes
+
+jq-count:
+  Elapsed: 0:00.27
+  Max RSS: 98452 kbytes
+
+simdjson-count:
+  Elapsed: 0:00.08
+  Max RSS: 55032 kbytes
+
+jq-sum:
+  Elapsed: 0:00.34
+  Max RSS: 103564 kbytes
+
+simdjson-sum:
+  Elapsed: 0:00.09
+  Max RSS: 55156 kbytes
+
+jq-identity:
+  Elapsed: 0:00.51
+  Max RSS: 111672 kbytes
+
+simdjson-identity:
+  Elapsed: 0:00.58
+  Max RSS: 151476 kbytes
+#+end_src
+
+Interpretation:
+- On the streamed/reduction cases (=take 5=, =count=, =sum=), the simdjson
+  path uses materially less memory than jq.
+- On full =identity=, the current simdjson branch uses *more* memory than jq.
+  So the memory win is workload-dependent, not universal.
+
+* Final Audit Result
+
+- I was wrong to imply that Yojson was fully removed.
+  It was not.
+
+- It *is* correct to say that the experimental CLI input path on this branch,
+  with =JX_EXPERIMENTAL_SIMDJSON_TOP_ARRAY=1= enabled, no longer uses Yojson
+  for input parsing.
+
+- It *is* correct to say that on the tested commands, this branch beats both
+  =jx main= and =jq= for:
+  - =where .price > 400 | take 5=
+  - =count=
+  - =map .price | sum=
+
+- It is *not* correct to imply a universal memory improvement.
+  For the streamed/reduction cases, memory is clearly better than jq in this
+  audit. For =identity=, memory is worse than jq.
+
+- It is *not* correct to say it beats =jq= on identity.
+  On identity it is roughly at parity, but still slightly slower in this audit.

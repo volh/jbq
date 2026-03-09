@@ -38,6 +38,9 @@ let write_float buf f =
     Buffer.add_string buf s;
     if float_needs_period s then Buffer.add_string buf ".0"
 
+let write_bigint buf z =
+  Buffer.add_string buf (Z.to_string z)
+
 let compact_size (v : Value.t) : int =
   let n = ref 0 in
   let limit = 80 in
@@ -48,6 +51,7 @@ let compact_size (v : Value.t) : int =
     | Bool true -> add 4
     | Bool false -> add 5
     | Int i -> add (String.length (string_of_int i))
+    | BigInt z -> add (String.length (Z.to_string z))
     | Float _ -> add 20
     | String s -> add (String.length s + 2)
     | Array [] -> add 2
@@ -73,6 +77,7 @@ let rec write_compact buf (v : Value.t) =
   | Bool true -> Buffer.add_string buf "true"
   | Bool false -> Buffer.add_string buf "false"
   | Int i -> Buffer.add_string buf (string_of_int i)
+  | BigInt z -> write_bigint buf z
   | Float f -> write_float buf f
   | String s -> write_string buf s
   | Array [] -> Buffer.add_string buf "[]"
@@ -103,7 +108,7 @@ let newline_indent buf depth =
 
 let rec write_pretty buf depth (v : Value.t) =
   match v with
-  | Null | Bool _ | Int _ | Float _ | String _ ->
+  | Null | Bool _ | Int _ | BigInt _ | Float _ | String _ ->
     write_compact buf v
   | Array [] -> Buffer.add_string buf "[]"
   | Array xs ->
