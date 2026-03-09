@@ -71,12 +71,18 @@ value alloc_value_array(value list) {
   CAMLreturn(block);
 }
 
-value alloc_value_object(value list) {
-  CAMLparam1(list);
-  CAMLlocal1(block);
-  block = caml_alloc(1, TAG_VALUE_OBJECT);
-  Store_field(block, 0, list);
-  CAMLreturn(block);
+value alloc_value_object(value fields) {
+  CAMLparam1(fields);
+  CAMLlocal1(result);
+  static const value *closure = nullptr;
+  if (closure == nullptr) {
+    closure = caml_named_value("jx_simdjson_object_of_fields");
+    if (closure == nullptr) {
+      fail("object constructor callback is not registered");
+    }
+  }
+  result = caml_callback(*closure, fields);
+  CAMLreturn(result);
 }
 
 value alloc_value_bigint(std::string_view s) {

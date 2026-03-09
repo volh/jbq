@@ -53,13 +53,15 @@ and eval_literal = function
 
 and eval_field input name optional loc =
   match input with
-  | Value.Object kvs -> (
-    match List.assoc_opt name kvs with
+  | Value.Object _ -> (
+    match Value.object_find_opt name input with
     | Some v -> v
     | None ->
       if optional then Value.Null
       else
-        let available = List.map fst kvs in
+        let available =
+          Value.object_entries input |> Array.to_list |> List.map fst
+        in
         let suggestion =
           match find_closest name available with
           | Some s -> Some (Printf.sprintf "did you mean .%s?" s)
@@ -93,8 +95,8 @@ and eval_index input index loc =
       else
         Error.raise_ ~loc Index_out_of_bounds
           (Printf.sprintf "index %d out of bounds (length %d)" i len)
-    | Value.Object kvs, Value.String k -> (
-      match List.assoc_opt k kvs with
+    | Value.Object _, Value.String k -> (
+      match Value.object_find_opt k input with
       | Some v -> v
       | None ->
         Error.raise_ ~loc Key_not_found
@@ -256,10 +258,16 @@ and value_eq a b =
   | Value.Array a, Value.Array b ->
     List.length a = List.length b && List.for_all2 value_eq a b
   | Value.Object a, Value.Object b ->
-    List.length a = List.length b
-    && List.for_all2
-         (fun (k1, v1) (k2, v2) -> String.equal k1 k2 && value_eq v1 v2)
-         a b
+    Array.length a.fields = Array.length b.fields
+    &&
+    let rec loop i =
+      if i = Array.length a.fields then true
+      else
+        let k1, v1 = a.fields.(i) in
+        let k2, v2 = b.fields.(i) in
+        String.equal k1 k2 && value_eq v1 v2 && loop (i + 1)
+    in
+    loop 0
   | _ -> false
 
 and value_compare a b =
@@ -302,7 +310,7 @@ and eval_object env input fields =
         | Explicit { key; value } -> (key, eval env input value))
       fields
   in
-  Value.Object kvs
+  Value.object_of_fields kvs
 
 and find_closest target candidates =
   let distance a b =

@@ -58,10 +58,11 @@ let compact_size (v : Value.t) : int =
     | Array xs ->
       add 2;
       List.iter (fun x -> walk x; add 2) xs
-    | Object [] -> add 2
-    | Object kvs ->
+    | Object obj when Array.length obj.fields = 0 -> add 2
+    | Object obj ->
+      let kvs = obj.fields in
       add 2;
-      List.iter (fun (k, v) -> add (String.length k + 4); walk v; add 2) kvs
+      Array.iter (fun (k, v) -> add (String.length k + 4); walk v; add 2) kvs
     | Seq s ->
       add 2;
       Seq.iter (fun x -> walk x; add 2) s
@@ -87,10 +88,11 @@ let rec write_compact buf (v : Value.t) =
       if i > 0 then Buffer.add_char buf ',';
       write_compact buf x) xs;
     Buffer.add_char buf ']'
-  | Object [] -> Buffer.add_string buf "{}"
-  | Object kvs ->
+  | Object _ when Array.length (Value.object_entries v) = 0 -> Buffer.add_string buf "{}"
+  | Object _ ->
+    let kvs = Value.object_entries v in
     Buffer.add_char buf '{';
-    List.iteri (fun i (k, v) ->
+    Array.iteri (fun i (k, v) ->
       if i > 0 then Buffer.add_char buf ',';
       write_string buf k;
       Buffer.add_char buf ':';
@@ -126,11 +128,12 @@ let rec write_pretty buf depth (v : Value.t) =
         write_pretty buf (depth + 1) x) xs;
       newline_indent buf depth;
       Buffer.add_char buf ']')
-  | Object [] -> Buffer.add_string buf "{}"
-  | Object kvs ->
-    if compact_size v <= 80 then (
+  | Object _ ->
+    let kvs = Value.object_entries v in
+    if Array.length kvs = 0 then Buffer.add_string buf "{}"
+    else if compact_size v <= 80 then (
       Buffer.add_string buf "{ ";
-      List.iteri (fun i (k, v) ->
+      Array.iteri (fun i (k, v) ->
         if i > 0 then Buffer.add_string buf ", ";
         write_string buf k;
         Buffer.add_string buf ": ";
@@ -138,7 +141,7 @@ let rec write_pretty buf depth (v : Value.t) =
       Buffer.add_string buf " }")
     else (
       Buffer.add_char buf '{';
-      List.iteri (fun i (k, v) ->
+      Array.iteri (fun i (k, v) ->
         if i > 0 then Buffer.add_char buf ',';
         newline_indent buf (depth + 1);
         write_string buf k;

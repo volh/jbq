@@ -7,10 +7,14 @@ type t =
   | Float of float
   | String of string
   | Array of t list
-  | Object of (string * t) list
+  | Object of object_data
   | Seq of t Seq.t
   | Xd of t * xd
   | BigInt of Z.t
+
+and object_data = {
+  fields : (string * t) array;
+}
 
 and xd_step = t list -> t -> t list * xd_signal
 and xd = { xd_init : xd_step -> xd_step }
@@ -58,15 +62,28 @@ let to_string_exn = function
   | String s -> s
   | v -> failwith ("expected string, got " ^ type_name v)
 
+let object_of_fields fields = Object { fields = Array.of_list fields }
+
+let object_entries = function
+  | Object obj -> obj.fields
+  | v -> failwith ("expected object, got " ^ type_name v)
+
+let object_find_opt key = function
+  | Object obj ->
+    let rec loop i =
+      if i >= Array.length obj.fields then None
+      else
+        let k, v = obj.fields.(i) in
+        if String.equal k key then Some v else loop (i + 1)
+    in
+    loop 0
+  | v -> failwith ("expected object, got " ^ type_name v)
+
 let to_list_exn = function
   | Array xs -> xs
   | Seq s -> List.of_seq s
   | Xd (source, xd) -> !xd_run_ref xd (to_seq_of source)
   | v -> failwith ("expected array, got " ^ type_name v)
-
-let to_assoc_exn = function
-  | Object kvs -> kvs
-  | v -> failwith ("expected object, got " ^ type_name v)
 
 let realize = function
   | Seq s -> Array (List.of_seq s)

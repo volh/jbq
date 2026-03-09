@@ -1,4 +1,5 @@
 let () =
+  Callback.register "jx_simdjson_object_of_fields" Value.object_of_fields;
   Callback.register "jx_simdjson_bigint_value_of_string"
     (fun s -> Value.of_z (Z.of_string s))
 

@@ -8,6 +8,12 @@ let eval_str query json_str =
   let result = Jx.Interpreter.eval [] input ast in
   Jx.Printer.to_json ~compact:true result
 
+let eval_pretty_str query json_str =
+  let input = Jx.Simdjson_native.parse_value json_str in
+  let ast = Jx.Parser.parse query in
+  let result = Jx.Interpreter.eval [] input ast in
+  Jx.Printer.to_json result
+
 let eval_stream_str query json_str =
   let input = Jx.Simdjson_stream.top_array_input json_str in
   let ast = Jx.Parser.parse query in
@@ -65,6 +71,13 @@ let test_simdjson_stream_count () =
     "streamed count"
     "3"
     (eval_stream_str "count" "[1,2,3]")
+
+let test_pretty_print_array_of_objects () =
+  Alcotest.(check string)
+    "pretty print array of objects"
+    {|[ { "name": "Alice", "age": 30 }, { "name": "Bob", "age": 40 } ]|}
+    (eval_pretty_str "map {name, age}"
+       {|[{"name":"Alice","age":30},{"name":"Bob","age":40}]|})
 
 let test_simdjson_stream_map () =
   Alcotest.(check string)
@@ -528,6 +541,7 @@ let () =
           Alcotest.test_case "parse value" `Quick test_simdjson_parse_value;
           Alcotest.test_case "stream where take" `Quick test_simdjson_stream_where_take;
           Alcotest.test_case "stream count" `Quick test_simdjson_stream_count;
+          Alcotest.test_case "pretty print array of objects" `Quick test_pretty_print_array_of_objects;
           Alcotest.test_case "stream map" `Quick test_simdjson_stream_map;
           Alcotest.test_case "stream take" `Quick test_simdjson_stream_take;
           Alcotest.test_case "stream skip" `Quick test_simdjson_stream_skip;

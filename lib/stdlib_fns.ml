@@ -10,7 +10,7 @@ type unique_key =
   | KFloat of int64
   | KString of string
   | KArray of unique_key list
-  | KObject of (string * unique_key) list
+  | KObject of (string * unique_key) array
 
 let rec unique_key_of_value value =
   match Value.realize value with
@@ -21,8 +21,9 @@ let rec unique_key_of_value value =
   | Value.Float f -> KFloat (Int64.bits_of_float f)
   | Value.String s -> KString s
   | Value.Array xs -> KArray (List.map unique_key_of_value xs)
-  | Value.Object kvs ->
-    KObject (List.map (fun (k, v) -> (k, unique_key_of_value v)) kvs)
+  | Value.Object _ ->
+    let kvs = Value.object_entries value in
+    KObject (Array.map (fun (k, v) -> (k, unique_key_of_value v)) kvs)
   | Value.Seq _ | Value.Xd _ -> assert false
 
 let require_collection name input loc =
@@ -152,7 +153,7 @@ let dispatch env input name args loc =
           order := key_str :: !order;
           Hashtbl.add groups key_str [ item ])
       xs;
-    Value.Object
+    Value.object_of_fields
       (List.rev !order
       |> List.map (fun k -> (k, Value.Array (List.rev (Hashtbl.find groups k)))))
   | "reverse", [] ->
@@ -187,7 +188,7 @@ let dispatch env input name args loc =
     | Value.Array xs -> Value.Int (List.length xs)
     | Value.Xd _ -> Value.Int (fold_collection (fun n _ -> n + 1) 0 input)
     | Value.Seq s -> Value.Int (Seq.fold_left (fun acc _ -> acc + 1) 0 s)
-    | Value.Object kvs -> Value.Int (List.length kvs)
+    | Value.Object _ -> Value.Int (Array.length (Value.object_entries input))
     | Value.String s -> Value.Int (String.length s)
     | Value.Null -> Value.Int 0
     | _ -> Value.Int 1)
@@ -308,15 +309,17 @@ let dispatch env input name args loc =
   (* === Object functions === *)
   | "keys", [] -> (
     match input with
-    | Value.Object kvs ->
-      Value.Array (List.map (fun (k, _) -> Value.String k) kvs)
+    | Value.Object _ ->
+      let kvs = Value.object_entries input in
+      Value.Array (Array.to_list (Array.map (fun (k, _) -> Value.String k) kvs))
     | _ ->
       Error.raise_ ~loc Type_mismatch
         (Printf.sprintf "keys requires object, got %s"
            (Value.type_name input)))
   | "values", [] -> (
     match input with
-    | Value.Object kvs -> Value.Array (List.map snd kvs)
+    | Value.Object _ ->
+      Value.Array (Value.object_entries input |> Array.to_list |> List.map snd)
     | _ ->
       Error.raise_ ~loc Type_mismatch
         (Printf.sprintf "values requires object, got %s"
@@ -333,11 +336,10 @@ let dispatch env input name args loc =
               "pick requires field names as arguments")
         fields
     in
-    let kvs = Value.to_assoc_exn input in
-    Value.Object
+    Value.object_of_fields
       (List.filter_map
          (fun name ->
-           match List.assoc_opt name kvs with
+           match Value.object_find_opt name input with
            | Some v -> Some (name, v)
            | None -> None)
          field_names)
@@ -353,9 +355,10 @@ let dispatch env input name args loc =
               "omit requires field names as arguments")
         fields
     in
-    let kvs = Value.to_assoc_exn input in
-    Value.Object
-      (List.filter (fun (k, _) -> not (List.mem k field_names)) kvs)
+    Value.object_of_fields
+      (Value.object_entries input
+      |> Array.to_list
+      |> List.filter (fun (k, _) -> not (List.mem k field_names)))
 
   (* === Type functions === *)
   | "type", [] -> Value.String (Value.type_name input)
