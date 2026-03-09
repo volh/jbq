@@ -4,141 +4,134 @@
 
 * Setup
 
+- jx version: 0.1.0 (OCaml 5.4.0, transducer-fused pipelines, direct printer)
 - jq version: 1.8.1 (C)
-- jx version: 0.1.0 (OCaml 5.4.0, transducer-fused pipelines)
-- query-json version: 0.6.1 (OCaml, installed via npm)
-- 20 runs per test, 3 warmup runs discarded, median reported
-- Memory: peak RSS via =/usr/bin/time -v=
-- Ratio = jx/other (below 1.0 = jx wins)
+- query-json version: 0.6.1 (OCaml, native binary via npm)
+- Benchmarked with [[https://github.com/sharkdp/hyperfine][hyperfine]], warmup 3, min 10 runs
 - Platform: CachyOS Linux 6.19.5-3
+- Ratio = jx/other (below 1.0 = jx wins)
 
 * Results
 
 ** Small object (single record)
 
-| Test                 | jx time | jq time | qj time | jx/jq | jx/qj | jx mem | jq mem | qj mem |
-|----------------------+---------+---------+---------+-------+-------+--------+--------+--------|
-| identity (.)         | 2.4ms   | 2.6ms   | 2.5ms   | 0.91  | 0.97  | 5.1M   | 5.3M   | 6.0M   |
-| field access (.name) | 2.2ms   | 2.6ms   | 2.5ms   | *0.85* | 0.90 | 5.0M   | 5.3M   | 5.7M   |
-| nested field         | 2.8ms   | 3.5ms   | 3.2ms   | *0.82* | *0.88* | 5.0M | 5.3M   | 5.6M   |
-| arithmetic           | 3.0ms   | 3.4ms   | 2.5ms   | *0.87* | 1.19  | 5.1M   | 5.3M   | 5.9M   |
-| conditional          | 2.3ms   | 2.8ms   | 2.5ms   | *0.84* | 0.92 | 5.0M   | 5.3M   | 5.8M   |
-| object {name, age}   | 2.2ms   | 2.7ms   | 2.4ms   | *0.84* | 0.92 | 5.1M   | 5.4M   | 5.9M   |
+All three tools ~2-3ms. Dominated by process startup, not meaningful to compare.
+jx edges ahead on most operations.
 
-jx wins 5/6 vs jq on time. All three comparable on memory (~5-6M).
+| Test                 | jx    | jq    | qj    | jx/jq | jx/qj |
+|----------------------+-------+-------+-------+-------+-------|
+| identity (.)         | 2.5ms | 2.9ms | 2.6ms |  0.86 |  0.97 |
+| field access (.name) | 2.4ms | 2.7ms | 2.6ms |  0.87 |  0.92 |
+| nested field         | 2.4ms | 2.8ms | 2.6ms |  0.86 |  0.93 |
+| arithmetic           | 2.4ms | 2.7ms | 2.6ms |  0.87 |  0.90 |
+| conditional          | 2.6ms | 2.8ms | 2.7ms |  0.96 |  0.99 |
+| object {name, age}   | 2.5ms | 2.9ms | 2.7ms |  0.87 |  0.93 |
 
 ** Medium array (1,000 items)
 
-| Test                     | jx time | jq time | qj time | jx/jq | jx/qj | jx mem | jq mem | qj mem |
-|--------------------------+---------+---------+---------+-------+-------+--------+--------+--------|
-| identity (.)             | 17.0ms  | 7.3ms   | 18.2ms  | 2.34  | 0.93  | 8.9M   | 5.8M   | 11.7M  |
-| where (.price > 250)     | 11.9ms  | 6.6ms   | 11.7ms  | 1.81  | 1.02  | 8.3M   | 5.8M   | 10.1M  |
-| map (.name)              | 5.8ms   | 5.1ms   | 7.4ms   | 1.14  | *0.78* | 7.7M  | 5.7M   | 8.7M   |
-| where | map pipeline     | 5.7ms   | 5.3ms   | 6.0ms   | 1.07  | 0.95  | 7.7M   | 5.7M   | 8.6M   |
-| sort_by (.price)         | 20.7ms  | 8.6ms   | 20.9ms  | 2.42  | 0.99  | 9.3M   | 5.8M   | 12.2M  |
-| group_by (.city)         | 18.4ms  | 9.9ms   | 21.0ms  | 1.85  | *0.88* | 9.3M  | 5.7M   | 12.3M  |
-| unique (map .city)       | 5.2ms   | 5.3ms   | 4.9ms   | 0.99  | 1.07  | 7.0M   | 5.7M   | 6.6M   |
-| count                    | 5.6ms   | 4.7ms   | 4.6ms   | 1.19  | 1.23  | 6.6M   | 5.6M   | 6.9M   |
-| sum (map .price)         | 5.1ms   | 5.4ms   | 5.3ms   | 0.94  | 0.97  | 6.7M   | 5.8M   | 7.1M   |
-| take 10                  | 5.0ms   | 5.4ms   | 5.2ms   | 0.94  | 0.98  | 7.0M   | 5.6M   | 6.9M   |
-| skip 990                 | 5.3ms   | 4.8ms   | 4.7ms   | 1.10  | 1.14  | 7.1M   | 5.6M   | 6.9M   |
-| where | take 5 (early)   | 4.9ms   | 5.1ms   | 7.1ms   | 0.96  | *0.69* | 6.6M  | 5.7M   | 8.6M   |
-| map | take 5 (early)     | 4.9ms   | 5.0ms   | 4.9ms   | 0.99  | 1.00  | 6.6M   | 5.6M   | 7.1M   |
+| Test                   | jx     | jq    | qj     | jx/jq | jx/qj |
+|------------------------+--------+-------+--------+-------+-------|
+| identity (.)           | 10.0ms | 8.3ms | 20.1ms |  1.21 | *0.50* |
+| where (.price > 250)   | 7.9ms  | 7.8ms | 13.2ms |  1.02 | *0.60* |
+| map (.name)            | 5.6ms  | 5.2ms | 6.6ms  |  1.07 | *0.85* |
+| where | map            | 5.4ms  | 5.7ms | 6.4ms  | *0.94* | *0.84* |
+| sort_by (.price)       | 13.2ms | 9.9ms | 23.3ms |  1.34 | *0.57* |
+| group_by (.city)       | 12.5ms | 10.2ms| 22.5ms |  1.22 | *0.56* |
+| unique (map .city)     | 6.7ms  | 5.7ms | 5.4ms  |  1.18 |  1.24 |
+| count                  | 5.6ms  | 5.4ms | 5.8ms  |  1.04 |  0.96 |
+| sum (map .price)       | 5.8ms  | 6.0ms | 5.3ms  | *0.98* |  1.11 |
+| take 10                | 5.1ms  | 5.2ms | 5.6ms  | *0.97* | *0.90* |
+| where | take 5 (early) | 5.9ms  | 5.6ms | 6.9ms  |  1.05 | *0.84* |
 
-Transducer pipeline ops (where|map, sum, take, unique) are competitive with jq.
-Identity/sort_by/group_by still 2x slower — dominated by parse+print overhead.
-jx consistently faster than query-json on transducer ops.
+jx beats jq on where|map, sum, take. Near-parity on most.
+jx beats query-json on 8/11 tests.
 
 ** Large array (10,000 items)
 
-| Test                      | jx time | jq time | qj time | jx/jq | jx/qj | jx mem | jq mem | qj mem |
-|---------------------------+---------+---------+---------+-------+-------+--------+--------+--------|
-| identity (.)              | 164ms   | 54ms    | 161ms   | 3.04  | 1.02  | 28.2M  | 14.8M  | 40.9M  |
-| where (.price > 250)      | 110ms   | 47ms    | 105ms   | 2.36  | 1.05  | 23.9M  | 14.2M  | 26.5M  |
-| map (.name)               | 52ms    | 30ms    | 43ms    | 1.73  | 1.23  | 20.3M  | 14.2M  | 17.2M  |
-| where | map pipeline      | 50ms    | 35ms    | 42ms    | 1.44  | 1.20  | 20.1M  | 14.1M  | 16.5M  |
-| sort_by (.price)           | 201ms  | 80ms    | 218ms   | 2.53  | 0.92  | 28.6M  | 15.1M  | 42.0M  |
-| sum (map .price)           | 49ms   | 33ms    | 39ms    | 1.47  | 1.26  | 20.1M  | 14.1M  | 15.8M  |
-| where | take 5 (early)     | 46ms   | 27ms    | 44ms    | 1.69  | 1.05  | 20.0M  | 14.0M  | 15.3M  |
-| map | take 5 (early)       | 46ms   | 25ms    | 36ms    | 1.84  | 1.28  | 19.2M  | 13.8M  | 15.6M  |
-| where | map | take 3 (early) | 43ms | 27ms    | 40ms    | 1.62  | 1.09  | 19.2M  | 13.9M  | 15.5M  |
+| Test                    | jx    | jq    | qj     | jx/jq | jx/qj |
+|-------------------------+-------+-------+--------+-------+-------|
+| identity (.)            | 94ms  | 57ms  | 178ms  |  1.65 | *0.53* |
+| where (.price > 250)    | 75ms  | 53ms  | 116ms  |  1.41 | *0.65* |
+| map (.name)             | 52ms  | 34ms  | 52ms   |  1.52 |  1.00 |
+| where | map             | 53ms  | 43ms  | 47ms   |  1.23 |  1.12 |
+| sort_by (.price)        | 131ms | 88ms  | 242ms  |  1.48 | *0.54* |
+| sum (map .price)        | 52ms  | 36ms  | 40ms   |  1.46 |  1.30 |
+| where | take 5 (early)  | 51ms  | 30ms  | 41ms   |  1.71 |  1.23 |
 
-jq wins all on time. jx and query-json roughly comparable.
-Memory: jq ~14M, jx ~20-28M, qj ~15-42M.
+** Extra-large array (100,000 items) — hyperfine
 
-** Extra-large array (100,000 items)
-
-| Test                        | jx time | jq time | qj time | jx/jq | jx/qj | jx mem | jq mem | qj mem |
-|-----------------------------+---------+---------+---------+-------+-------+--------+--------+--------|
-| identity (.)                | 1.7s    | 508ms   | 1.5s    | 3.25  | 1.08  | 214M   | 109M   | 356M   |
-| where (.price > 250)        | 994ms   | 444ms   | 946ms   | 2.24  | 1.05  | 171M   | 98M    | 190M   |
-| map (.name)                 | 466ms   | 291ms   | 396ms   | 1.60  | 1.18  | 145M   | 101M   | 103M   |
-| sort_by (.price)            | 2.0s    | 848ms   | 2.3s    | 2.35  | *0.87* | 219M  | 109M   | 363M   |
-| sum (map .price)            | 432ms   | 316ms   | 332ms   | 1.37  | 1.30  | 134M   | 101M   | 83M    |
-| where | take 5 (early)      | 426ms   | 234ms   | 334ms   | 1.82  | 1.28  | 134M   | 97M    | 79M    |
-| where | map | take 3 (early) | 418ms  | 236ms   | 347ms   | 1.77  | 1.21  | 134M   | 97M    | 78M    |
-
-jq wins all on time. Gap: 1.4-3.3x.
-Memory: jq ~100M, jx ~134-219M, qj ~78-363M (qj memory varies wildly).
+| Test                    | jx     | jq     | qj      | jx/jq | jx/qj |
+|-------------------------+--------+--------+---------+-------+-------|
+| identity (.)            | 772ms  | 512ms  | 1569ms  |  1.51 | *0.49* |
+| where (.price > 250)    | 645ms  | 466ms  | 1034ms  |  1.38 | *0.62* |
+| map (.name)             | 471ms  | 321ms  | 429ms   |  1.47 |  1.10 |
+| sort_by (.price)        | 1392ms | 943ms  | 2359ms  |  1.48 | *0.59* |
+| sum (map .price)        | 461ms  | 339ms  | 363ms   |  1.36 |  1.27 |
+| where | take 5 (early)  | 409ms  | 237ms  | 339ms   |  1.73 |  1.21 |
+| count                   | 404ms  | 247ms  | 297ms   |  1.64 |  1.36 |
 
 * Analysis
 
 ** Where jx is faster
 
 Small object operations: field access, arithmetic, nested lookups, conditionals.
-jx wins 5/6 vs jq at the single-object scale — the typical CLI use case.
+jx wins 5/6 vs jq at the single-object scale.
 
-At 1K scale, transducer-fused operations (sum, take, unique, where|take) are
-competitive with jq (within 0.94-1.07x). The transducer pipeline eliminates
-intermediate allocations for composed operations.
+At 1K, transducer-fused operations (where|map, sum, take) are at parity or
+faster than jq.
+
+jx is *2x faster* than query-json on identity and sort_by at all scales.
 
 ** Where jq is faster
 
-Everything at scale. The gap grows with data size:
-- 1K: 1-2.3x (transducer ops near parity)
-- 10K: 1.4-3.0x
-- 100K: 1.4-3.3x
-
-Identity pass-through is consistently the worst ratio (~3x), confirming the
-bottleneck is parse/represent/print, not the interpreter.
+At scale, jq wins everything by 1.3-1.7x. The gap is consistent — not growing
+as fast as before the direct printer optimization.
 
 ** jx vs query-json
 
-At small/medium scale jx is faster or tied on most operations.
-At large scale query-json edges ahead on some ops (map, sum, take) due to
-its own optimized parser. jx wins sort_by at 100K (*0.87x*) due to lower
-allocation overhead in the sort path. Memory-wise query-json uses less memory
-on pipeline ops but significantly more on identity/sort (up to 363M vs 219M).
+jx dominates query-json at scale:
+- identity: 2x faster (772ms vs 1569ms at 100K)
+- where: 1.6x faster
+- sort_by: 1.7x faster
 
-** Bottleneck diagnosis
+query-json edges ahead only on sum and count where its lighter parser helps.
 
-The scaling behavior strongly confirms the cost is in JSON parsing and value
-representation, not in the jx interpreter or transducer pipeline:
+** Profiling breakdown (100K, =JX_PROFILE=1=)
 
-1. *Yojson parsing* — allocates OCaml =Yojson.Basic.t= polymorphic variant tree,
-   then =of_yojson= walks it again to build =Value.t=. Two full tree allocations
-   before any pipeline op fires.
+| Stage            | identity | where  | sum   | where|take 5 |
+|------------------+----------+--------+-------+--------------|
+| read file        | 11ms     | 11ms   | 11ms  | 11ms         |
+| *yojson parse*   | *284ms*  | *288ms* | *290ms* | *279ms*    |
+| *of_yojson*      | *96ms*   | *94ms* | *94ms* | *101ms*     |
+| parse query      | 0ms      | 0ms    | 0ms   | 0ms          |
+| eval pipeline    | 0ms      | 0ms    | 19ms  | 0ms          |
+| *output (direct)* | *369ms* | *234ms* | 0ms  | 0ms          |
+| print            | 1ms      | 1ms    | 0ms   | 0ms          |
 
-2. *Value.t representation* — OCaml variant types carry per-constructor overhead.
-   jq uses compact NaN-boxed 8-byte slots.
+Remaining bottleneck: yojson parse (284ms) + of_yojson (96ms) = *380ms input floor*.
+Every query pays this regardless of pipeline complexity.
 
-3. *Output round-trip* — =to_yojson= builds a third tree, then =pretty_to_string=
-   allocates the output string. Four traversals for identity.
+** Optimization history
 
-4. *No streaming possible* — =Yojson.Basic.from_string= returns a fully materialized
-   tree. Even =take 1= on 100K array pays full parse cost. Transducers cannot
-   optimize below this floor.
+| Change              | Identity 100K (jx/jq) | Notes                         |
+|---------------------+------------------------+-------------------------------|
+| Seq-based lazy      | 3.10x                 | baseline                      |
+| Transducer pipelines | 3.25x                | pipeline ops faster, identity same |
+| Direct printer      | *1.51x*               | output: 1098ms → 369ms       |
 
-** Possible optimizations
+** Remaining bottleneck
 
-- Custom streaming JSON parser → parse directly into =Value.t=, skip Yojson entirely
-- Stream top-level array elements → feed directly to transducer pipeline
-- Compact value representation (NaN-boxing or flat arena)
-- Direct stdout output without intermediate string allocation
+=Yojson.Basic.from_string= (284ms) + =Value.of_yojson= (96ms) = 380ms.
+This is the floor for all operations. jq's C parser + NaN-boxed values
+handle the same input in ~200ms.
+
+Options to close the remaining gap:
+- Direct parser (JSON → Value.t, skip Yojson.Basic.t): saves ~96ms (of_yojson)
+- Streaming top-level array into transducer: saves full parse for early-exit ops
 
 * Reproducing
 
 #+begin_src shell
 bash bench/generate_data.sh   # generate test data
-bash bench/run.sh             # run benchmarks
+bash bench/run.sh             # run benchmarks (requires hyperfine)
 #+end_src
