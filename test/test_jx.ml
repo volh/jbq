@@ -528,6 +528,170 @@ let test_lazy_no_realization () =
     (let result = eval_str "range | where (. > 1000000) | take 1" "null" in
      result = "[1000001]")
 
+(* === Schema inference tests === *)
+
+let schema_of input =
+  let s = Jx.Schema.infer input in
+  Jx.Printer.to_json ~compact:true (Jx.Schema.to_value s)
+
+let schema_str json_str =
+  schema_of (Jx.Simdjson_native.parse_value json_str)
+
+let schema_query_str query json_str =
+  let input = Jx.Simdjson_native.parse_value json_str in
+  let ast = Jx.Parser.parse query in
+  let result = Jx.Interpreter.eval [] input ast in
+  schema_of result
+
+let schema_sampled_str ~n json_str =
+  let input = Jx.Simdjson_native.parse_value json_str in
+  let s = Jx.Schema.infer_sampled ~n input in
+  Jx.Printer.to_json ~compact:true (Jx.Schema.to_value s)
+
+let test_schema_null () =
+  Alcotest.(check string) "null schema"
+    {|{"type":"null"}|}
+    (schema_str "null")
+
+let test_schema_boolean () =
+  Alcotest.(check string) "boolean const"
+    {|{"const":true}|}
+    (schema_str "true")
+
+let test_schema_integer () =
+  Alcotest.(check string) "integer const"
+    {|{"const":42}|}
+    (schema_str "42")
+
+let test_schema_number () =
+  Alcotest.(check string) "number const"
+    {|{"const":3.14}|}
+    (schema_str "3.14")
+
+let test_schema_string () =
+  Alcotest.(check string) "string const"
+    {|{"const":"hello"}|}
+    (schema_str {|"hello"|})
+
+let test_schema_simple_object () =
+  Alcotest.(check string) "simple object schema"
+    {|{"type":"object","properties":{"name":{"const":"Alice"},"age":{"const":30}},"required":["name","age"]}|}
+    (schema_str {|{"name":"Alice","age":30}|})
+
+let test_schema_nested_object () =
+  Alcotest.(check string) "nested object schema"
+    {|{"type":"object","properties":{"user":{"type":"object","properties":{"address":{"type":"object","properties":{"city":{"const":"NYC"}},"required":["city"]}},"required":["address"]}},"required":["user"]}|}
+    (schema_str {|{"user":{"address":{"city":"NYC"}}}|})
+
+let test_schema_homogeneous_array () =
+  Alcotest.(check string) "homogeneous array with enum"
+    {|{"type":"array","items":{"type":"integer","enum":[1,2,3]}}|}
+    (schema_str "[1,2,3]")
+
+let test_schema_array_of_objects () =
+  Alcotest.(check string) "array of objects with enum"
+    {|{"type":"array","items":{"type":"object","properties":{"name":{"type":"string","enum":["A","B"]},"age":{"type":"integer","enum":[30,25]}},"required":["name","age"]}}|}
+    (schema_str {|[{"name":"A","age":30},{"name":"B","age":25}]|})
+
+let test_schema_nullable_field () =
+  Alcotest.(check string) "nullable field with enum"
+    {|{"type":"array","items":{"type":"object","properties":{"name":{"type":"string","enum":["A","B"]},"age":{"type":["integer","null"],"enum":[30,null]}},"required":["name","age"]}}|}
+    (schema_str {|[{"name":"A","age":30},{"name":"B","age":null}]|})
+
+let test_schema_missing_field () =
+  Alcotest.(check string) "missing field not in required"
+    {|{"type":"array","items":{"type":"object","properties":{"name":{"type":"string","enum":["A","B"]},"email":{"const":"a@b"}},"required":["name"]}}|}
+    (schema_str {|[{"name":"A","email":"a@b"},{"name":"B"}]|})
+
+let test_schema_heterogeneous_array () =
+  Alcotest.(check string) "heterogeneous array"
+    {|{"type":"array","items":{"oneOf":[{"type":"integer"},{"type":"string"},{"type":"null"}]}}|}
+    (schema_str {|[1,"two",null]|})
+
+let test_schema_empty_array () =
+  Alcotest.(check string) "empty array"
+    {|{"type":"array"}|}
+    (schema_str "[]")
+
+let test_schema_empty_object () =
+  Alcotest.(check string) "empty object"
+    {|{"type":"object","properties":{}}|}
+    (schema_str "{}")
+
+let test_schema_array_of_arrays () =
+  Alcotest.(check string) "array of arrays"
+    {|{"type":"array","items":{"type":"array","items":{"type":"integer","enum":[1,2,3,4]}}}|}
+    (schema_str "[[1,2],[3,4]]")
+
+let test_schema_int_float_widening () =
+  Alcotest.(check string) "int/float widens to number"
+    {|{"type":"array","items":{"type":"object","properties":{"val":{"type":"number","enum":[1,2.5,3]}},"required":["val"]}}|}
+    (schema_str {|[{"val":1},{"val":2.5},{"val":3}]|})
+
+let test_schema_nested_merge () =
+  Alcotest.(check string) "nested object merge"
+    {|{"type":"array","items":{"type":"object","properties":{"name":{"type":"string","enum":["A","B"]},"addr":{"type":"object","properties":{"city":{"type":"string","enum":["NYC","LA"]},"zip":{"const":"10001"}},"required":["city"]}},"required":["name","addr"]}}|}
+    (schema_str
+       {|[{"name":"A","addr":{"city":"NYC","zip":"10001"}},{"name":"B","addr":{"city":"LA"}}]|})
+
+let test_schema_with_query () =
+  Alcotest.(check string) "schema after query"
+    {|{"type":"array","items":{"type":"object","properties":{"name":{"type":"string","enum":["A","B"]}},"required":["name"]}}|}
+    (schema_query_str "map {name}"
+       {|[{"name":"A","age":30},{"name":"B","age":25}]|})
+
+let test_schema_sampled () =
+  Alcotest.(check string) "sampled schema only sees first N"
+    {|{"type":"array","items":{"type":"integer","enum":[1,2]}}|}
+    (schema_sampled_str ~n:2 {|[1,2,"three","four"]|})
+
+let test_schema_bigint () =
+  Alcotest.(check string) "bigint const"
+    {|{"const":9223372036854775808}|}
+    (schema_str "9223372036854775808")
+
+let test_schema_enum_detection () =
+  Alcotest.(check string) "enum detection on repeated values"
+    {|{"type":"array","items":{"type":"object","properties":{"status":{"type":"string","enum":["active","inactive","pending"]},"level":{"type":"integer","enum":[1,2,3]}},"required":["status","level"]}}|}
+    (schema_str
+       {|[{"status":"active","level":1},{"status":"inactive","level":2},{"status":"active","level":3},{"status":"pending","level":1}]|})
+
+let test_schema_const_detection () =
+  Alcotest.(check string) "const for single-value field"
+    {|{"type":"array","items":{"type":"object","properties":{"v":{"const":"same"}},"required":["v"]}}|}
+    (schema_str {|[{"v":"same"},{"v":"same"},{"v":"same"}]|})
+
+let test_schema_bool_collapse () =
+  Alcotest.(check string) "both booleans collapse to type"
+    {|{"type":"array","items":{"type":"object","properties":{"v":{"type":"boolean"}},"required":["v"]}}|}
+    (schema_str {|[{"v":true},{"v":false},{"v":true}]|})
+
+let test_schema_nullable_enum () =
+  Alcotest.(check string) "nullable enum preserves values"
+    {|{"type":"array","items":{"type":"object","properties":{"v":{"type":["string","null"],"enum":["a","b",null]}},"required":["v"]}}|}
+    (schema_str {|[{"v":"a"},{"v":null},{"v":"b"}]|})
+
+let test_schema_enum_threshold () =
+  let many_values =
+    let items =
+      List.init 25 (fun i -> Printf.sprintf {|{"v":"val_%d"}|} i)
+    in
+    "[" ^ String.concat "," items ^ "]"
+  in
+  Alcotest.(check string) "enum collapses above threshold"
+    {|{"type":"array","items":{"type":"object","properties":{"v":{"type":"string"}},"required":["v"]}}|}
+    (schema_str many_values)
+
+let test_schema_nullable_shorthand () =
+  let items =
+    List.init 25 (fun i -> Printf.sprintf {|{"v":"val_%d"}|} i)
+  in
+  let with_nulls = items @ [ {|{"v":null}|} ] in
+  let json = "[" ^ String.concat "," with_nulls ^ "]" in
+  Alcotest.(check string) "nullable uses type array shorthand"
+    {|{"type":"array","items":{"type":"object","properties":{"v":{"type":["string","null"]}},"required":["v"]}}|}
+    (schema_str json)
+
 let () =
   Alcotest.run "jx"
     [
@@ -646,5 +810,34 @@ let () =
           Alcotest.test_case "array semantics preserved" `Quick test_lazy_preserves_array_semantics;
           Alcotest.test_case "map with interpolation" `Quick test_infinite_map_interpolation;
           Alcotest.test_case "laziness proof (1M skip)" `Quick test_lazy_no_realization;
+        ] );
+      ( "schema",
+        [
+          Alcotest.test_case "null" `Quick test_schema_null;
+          Alcotest.test_case "boolean" `Quick test_schema_boolean;
+          Alcotest.test_case "integer" `Quick test_schema_integer;
+          Alcotest.test_case "number" `Quick test_schema_number;
+          Alcotest.test_case "string" `Quick test_schema_string;
+          Alcotest.test_case "simple object" `Quick test_schema_simple_object;
+          Alcotest.test_case "nested object" `Quick test_schema_nested_object;
+          Alcotest.test_case "homogeneous array" `Quick test_schema_homogeneous_array;
+          Alcotest.test_case "array of objects" `Quick test_schema_array_of_objects;
+          Alcotest.test_case "nullable field" `Quick test_schema_nullable_field;
+          Alcotest.test_case "missing field" `Quick test_schema_missing_field;
+          Alcotest.test_case "heterogeneous array" `Quick test_schema_heterogeneous_array;
+          Alcotest.test_case "empty array" `Quick test_schema_empty_array;
+          Alcotest.test_case "empty object" `Quick test_schema_empty_object;
+          Alcotest.test_case "array of arrays" `Quick test_schema_array_of_arrays;
+          Alcotest.test_case "int/float widening" `Quick test_schema_int_float_widening;
+          Alcotest.test_case "nested merge" `Quick test_schema_nested_merge;
+          Alcotest.test_case "with query" `Quick test_schema_with_query;
+          Alcotest.test_case "sampled" `Quick test_schema_sampled;
+          Alcotest.test_case "bigint" `Quick test_schema_bigint;
+          Alcotest.test_case "enum detection" `Quick test_schema_enum_detection;
+          Alcotest.test_case "const detection" `Quick test_schema_const_detection;
+          Alcotest.test_case "bool collapse" `Quick test_schema_bool_collapse;
+          Alcotest.test_case "nullable enum" `Quick test_schema_nullable_enum;
+          Alcotest.test_case "enum threshold" `Quick test_schema_enum_threshold;
+          Alcotest.test_case "nullable shorthand" `Quick test_schema_nullable_shorthand;
         ] );
     ]
