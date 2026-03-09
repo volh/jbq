@@ -2,6 +2,27 @@ open Ast
 
 let eval_in_ctx env input expr = Interpreter.eval env input expr
 
+type unique_key =
+  | KNull
+  | KBool of bool
+  | KInt of int
+  | KFloat of int64
+  | KString of string
+  | KArray of unique_key list
+  | KObject of (string * unique_key) list
+
+let rec unique_key_of_value value =
+  match Value.realize value with
+  | Value.Null -> KNull
+  | Value.Bool b -> KBool b
+  | Value.Int i -> KInt i
+  | Value.Float f -> KFloat (Int64.bits_of_float f)
+  | Value.String s -> KString s
+  | Value.Array xs -> KArray (List.map unique_key_of_value xs)
+  | Value.Object kvs ->
+    KObject (List.map (fun (k, v) -> (k, unique_key_of_value v)) kvs)
+  | Value.Seq _ | Value.Xd _ -> assert false
+
 let require_collection name input loc =
   if not (Value.is_collection input) then
     Error.raise_ ~loc Type_mismatch
@@ -51,9 +72,7 @@ let dispatch env input name args loc =
     xd_compose input xd
   | "unique", [] ->
     require_collection "unique" input loc;
-    let xd = Transducer.unique
-      (fun item -> Yojson.Basic.to_string (Value.to_yojson item)) in
-    xd_compose input xd
+    xd_compose input (Transducer.unique unique_key_of_value)
   | "flatten", [] ->
     require_collection "flatten" input loc;
     xd_compose input Transducer.flatten
@@ -79,12 +98,10 @@ let dispatch env input name args loc =
     require_collection "sort_by" input loc;
     let xs = Value.to_list_exn (realize_input input) in
     let sorted =
-      List.sort
-        (fun a b ->
-          Interpreter.value_compare
-            (eval_in_ctx env a expr)
-            (eval_in_ctx env b expr))
-        xs
+      List.map (fun item -> (eval_in_ctx env item expr, item)) xs
+      |> List.sort (fun (key_a, _) (key_b, _) ->
+           Interpreter.value_compare key_a key_b)
+      |> List.map snd
     in
     Value.Array sorted
   | "group_by", [ expr ] ->
@@ -96,17 +113,15 @@ let dispatch env input name args loc =
       (fun item ->
         let key = eval_in_ctx env item expr in
         let key_str = Interpreter.value_to_string key in
-        if not (Hashtbl.mem groups key_str) then order := key_str :: !order;
-        let existing =
-          match Hashtbl.find_opt groups key_str with
-          | Some xs -> xs
-          | None -> []
-        in
-        Hashtbl.replace groups key_str (existing @ [ item ]))
+        match Hashtbl.find_opt groups key_str with
+        | Some rev_items -> Hashtbl.replace groups key_str (item :: rev_items)
+        | None ->
+          order := key_str :: !order;
+          Hashtbl.add groups key_str [ item ])
       xs;
     Value.Object
       (List.rev !order
-      |> List.map (fun k -> (k, Value.Array (Hashtbl.find groups k))))
+      |> List.map (fun k -> (k, Value.Array (List.rev (Hashtbl.find groups k)))))
   | "reverse", [] ->
     require_collection "reverse" input loc;
     let xs = Value.to_list_exn (realize_input input) in

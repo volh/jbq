@@ -137,6 +137,12 @@ let test_unique () =
     "unique preserves order" "[3,1,2]"
     (eval_str "unique" "[3,1,2,1,3,2]")
 
+let test_unique_objects () =
+  Alcotest.(check string)
+    "unique deduplicates structural objects"
+    {|[{"a":1},{"a":2}]|}
+    (eval_str "unique" {|[{"a":1},{"a":1},{"a":2}]|})
+
 let test_optional_field () =
   Alcotest.(check string)
     "optional field" "null"
@@ -317,6 +323,7 @@ let () =
           Alcotest.test_case "pick semicolon args" `Quick test_pick_semicolon_args;
           Alcotest.test_case "spaced postfix rejected" `Quick test_spaced_postfix_rejected;
           Alcotest.test_case "unique" `Quick test_unique;
+          Alcotest.test_case "unique objects" `Quick test_unique_objects;
           Alcotest.test_case "take" `Quick test_take;
           Alcotest.test_case "skip" `Quick test_skip;
           Alcotest.test_case "count" `Quick test_count;
