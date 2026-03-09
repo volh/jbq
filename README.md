@@ -201,6 +201,10 @@ items | map (x => {name: x.name, total: x.price * x.qty})
 
 jq is battle-tested, ubiquitous, and its streaming model handles arbitrarily large input. The `@base64`, `@uri`, `@csv` format strings are genuinely useful. `--slurp` and `--jsonargs` cover real CLI needs. jx doesn't aim to replace all of that on day one.
 
+Streaming status: the current CLI reads the full JSON input into memory and
+parses it before evaluation. Top-level array streaming is planned, but it is
+not implemented yet.
+
 ### Where jx diverges
 
 jq's generator semantics are powerful but produce puzzling behavior. `null | .x` silently returns `null`. `empty` propagates invisibly. The difference between `.[]` and `map(.)` is subtle. `if-then` without `else` is a filter, not a conditional.
