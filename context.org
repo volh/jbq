@@ -16,6 +16,7 @@ competed on runtime. jx competes on language design.
 
 ** Status
 Working prototype. 44/44 tests passing. CLI functional.
+Performance: 1.4-1.7x slower than jq at scale (down from 3.3x).
 
 ** Core Design Rules
 1. =.field= — dot is always data (field access)
@@ -30,8 +31,8 @@ jx 'items | where .price > 100 | map {name, price}' data.json
   ┌────────┐    ┌────────┐    ┌─────┐    ┌─────────────┐    ┌────────┐
   │ Lexer  │ -> │ Parser │ -> │ AST │ -> │ Interpreter │ -> │ Output │
   └────────┘    └────────┘    └─────┘    └─────────────┘    └────────┘
-   sedlex       recursive                  eager eval        yojson
-   238 lines    457 lines     58 lines     304 lines         5 lines
+   sedlex       recursive                  transducer        direct
+   238 lines    457 lines     58 lines     pipelines         printer
 #+end_src
 
 ** Module Dependency Graph
@@ -40,35 +41,139 @@ jx 'items | where .price > 100 | map {name, price}' data.json
    ^                                |
    |                                v
   Value <-- Interpreter <-------- (parse_expr for interpolation)
-               ^
-               | dispatch_ref (mutable)
-               v
-           Stdlib_fns
-               |
-           Printer <-- main.ml
+    ^          ^
+    |          | dispatch_ref (mutable)
+    |          v
+    |      Stdlib_fns
+    |          |
+    +---- Transducer
+    |
+  Printer <-- main.ml
 #+end_src
 
 The =dispatch_ref= mutable breaks a cyclic dependency between =Interpreter=
 and =Stdlib_fns=. Interpreter calls stdlib via the ref; =Stdlib_fns= calls
 =Interpreter.eval= directly. One-way dependency at the module level.
 
+=Value.xd_run_ref= similarly breaks the cycle between =Value= and =Transducer=.
+
 * File Inventory
 
-| File              | Lines | Purpose                              |
-|-------------------+-------+--------------------------------------|
-| lib/ast.ml        |    58 | Expression types, 17 AST constructors |
-| lib/lexer.ml      |   238 | sedlex tokenizer, string interpolation |
-| lib/parser.ml     |   457 | Recursive descent, precedence climbing |
-| lib/interpreter.ml |  304 | Eval AST against JSON values          |
-| lib/stdlib_fns.ml |   388 | 30+ built-in functions                |
-| lib/value.ml      |    74 | Runtime values (JSON + Seq.t)         |
-| lib/error.ml      |    57 | Structured errors with locations      |
-| lib/printer.ml    |     5 | JSON output via yojson                |
-| bin/main.ml       |    71 | CLI with cmdliner                     |
-| test/test_jx.ml   |   298 | 44 test cases                        |
-| bench/bench_lazy.ml |  120 | Lazy sequence memory benchmark       |
-| PLAN.org          |   260 | Project plan with phases              |
-| *Total*           | *2140* |                                      |
+| File               | Lines | Purpose                              |
+|--------------------+-------+--------------------------------------|
+| lib/ast.ml         |    58 | Expression types, 17 AST constructors |
+| lib/lexer.ml       |   238 | sedlex tokenizer, string interpolation |
+| lib/parser.ml      |   457 | Recursive descent, precedence climbing |
+| lib/interpreter.ml |   304 | Eval AST against JSON values          |
+| lib/stdlib_fns.ml  |   ~220 | 30+ built-in fns, transducer dispatch |
+| lib/value.ml       |   100 | Runtime values (JSON + Seq + Xd)      |
+| lib/transducer.ml  |    98 | Composable transducer primitives      |
+| lib/error.ml       |    57 | Structured errors with locations      |
+| lib/printer.ml     |   ~130 | Direct JSON printer (no Yojson)      |
+| bin/main.ml        |    ~80 | CLI with cmdliner, JX_PROFILE support |
+| test/test_jx.ml    |   298 | 44 test cases                        |
+| bench/run.sh       |   ~180 | Hyperfine benchmark (jx vs jq vs qj) |
+| bench/bench_lazy.ml |  162 | Lazy/transducer memory benchmark     |
+| BENCHMARKS.org     |   ~160 | Benchmark results and analysis       |
+| PLAN.org           |   260 | Project plan with phases              |
+
+* Performance Architecture
+
+** Transducer Pipeline (Clojure-style)
+
+Collection ops (where, map, take, skip, unique, flatten) compose into a single
+=Xd= descriptor — a chain of step functions. Execution is deferred until the
+result is realized (printed, aggregated, or sorted).
+
+#+begin_src ocaml
+(* Value.t carries the transducer descriptor *)
+type t = ... | Xd of t * xd
+
+(* Composing two transducers *)
+let compose a b : xd =
+  { xd_init = (fun next -> a.xd_init (b.xd_init next)) }
+#+end_src
+
+Pipeline: =where pred | map f | take n= builds one =Xd= with three
+composed steps. When realized, it makes a single pass over the source data.
+No intermediate collections are allocated.
+
+Aggregation (sum, avg, count) uses =Transducer.fold= for fused reduction —
+the transducer feeds directly into the fold accumulator.
+
+** Direct JSON Printer
+
+Writes JSON from =Value.t= directly to =Buffer.t=, skipping =Value.to_yojson=
+and =Yojson.Basic.pretty_to_string=. Supports compact and pretty modes with
+automatic compact/expanded formatting based on estimated width (80 char threshold).
+
+This was the single biggest performance win — output at 100K went from 1098ms
+to 369ms.
+
+** Profiling (=JX_PROFILE=1=)
+
+Set =JX_PROFILE=1= to see per-stage timing on stderr:
+
+#+begin_src bash
+JX_PROFILE=1 jx '.' large.json > /dev/null
+#   read file                    1.4 ms
+#   yojson parse                31.5 ms
+#   of_yojson convert            9.3 ms
+#   parse query                  0.0 ms
+#   eval pipeline                0.0 ms
+#   output                      44.4 ms
+#   print                        0.1 ms
+#+end_src
+
+** Performance Profile (100K records)
+
+| Stage            | Time  | % total | Notes                    |
+|------------------+-------+---------+--------------------------|
+| read file        | 11ms  | 1%      | I/O bound                |
+| *yojson parse*   | 284ms | 35%     | Yojson.Basic.from_string |
+| *of_yojson*      | 96ms  | 12%     | Tree walk to rename ctors |
+| parse query      | 0ms   | 0%      |                          |
+| eval pipeline    | 0-609ms | varies | 0 for identity, 609 for sort_by |
+| *output (direct)* | 0-369ms | varies | 0 for scalar, 369 for identity |
+| print            | 1ms   | 0%      |                          |
+
+Remaining bottleneck: yojson parse + of_yojson = *380ms input floor*.
+
+** Optimization History
+
+| Change               | Identity 100K (jx/jq) | Date       |
+|----------------------+------------------------+------------|
+| Seq-based lazy       | 3.10x                 | 2026-03-09 |
+| Transducer pipelines | 3.25x                 | 2026-03-09 |
+| Direct printer       | *1.51x*               | 2026-03-09 |
+
+** Next Optimizations (Planned)
+
+1. *Direct parser* (JSON → Value.t, skip Yojson.Basic.t)
+   - Saves ~96ms of_yojson conversion (12% of total)
+   - ~150 lines recursive descent, low risk
+   - Expected improvement: ~1.35x vs jq
+
+2. *Streaming top-level array parser*
+   - Parse one array element at a time, feed into transducer
+   - =take 5= on 100K would parse ~5 elements instead of 100K
+   - Would make pipeline ops O(output) on parse side — likely beat jq
+   - Architecturally compatible: transducers consume =t Seq.t=
+
+3. *(Speculative) Compact value representation*
+   - NaN-boxing or arena allocation
+   - Big effort, big payoff, big risk. Not yet justified.
+
+** query-json Findings
+
+query-json (=~/repos/query-json/=) forked Yojson into "jotason":
+- Disabled lexer position tracking for ~31% parse speedup
+- Three-tier integers (int → int64 → Big_int via zarith)
+- JSON comment support
+
+Despite these optimizations, query-json 0.6.1 is *slower than jq* at scale
+(contrary to their published benchmarks from v0.5.52). jx is 1.5-2x faster
+than query-json on most operations at 100K.
 
 * Language Features (Implemented)
 
@@ -136,66 +241,70 @@ echo '[1,2,3,4,5]' | jx 'where . > 3'   # [4, 5]
 
 * Stdlib (30 functions implemented)
 
-** Collection
-| Function        | Args     | Description                             |
-|-----------------+----------+-----------------------------------------|
-| =where=          | expr     | Filter by predicate (implicit iteration) |
-| =map=            | expr     | Transform each element                  |
-| =sort_by=        | expr     | Sort by expression result               |
-| =group_by=       | expr     | Group into object (not nested arrays)   |
-| =unique=         | /none/   | Deduplicate, preserves insertion order  |
-| =flatten=        | /none/   | Flatten one level of nesting            |
-| =reverse=        | /none/   | Reverse array                           |
+** Collection (transducible)
+| Function  | Args   | Description                              |
+|-----------+--------+------------------------------------------|
+| =where=  | expr   | Filter by predicate (composes transducer) |
+| =map=    | expr   | Transform each element                   |
+| =unique= | /none/ | Deduplicate, preserves insertion order    |
+| =flatten= | /none/ | Flatten one level of nesting             |
+| =take=   | n      | First n (composes transducer, early exit) |
+| =skip=   | n      | Skip n                                   |
+
+** Collection (eager — must realize)
+| Function   | Args | Description                         |
+|------------+------+-------------------------------------|
+| =sort_by=  | expr | Sort by expression result           |
+| =group_by= | expr | Group into object (not nested arrays)|
+| =reverse=  | /none/ | Reverse array                     |
 
 ** Slicing
 | Function | Args   | Description   |
 |----------+--------+---------------|
-| =first=   | /none/ | First element |
-| =last=    | /none/ | Last element  |
-| =take=    | n      | First n       |
-| =skip=    | n      | Skip n        |
-| =count=   | /none/ | Length        |
-| =length=  | /none/ | Alias for count |
+| =first=  | /none/ | First element (uses take 1 on Xd) |
+| =last=   | /none/ | Last element  |
+| =count=  | /none/ | Length (fused fold on Xd) |
+| =length= | /none/ | Alias for count |
 
-** Aggregation
-| Function | Description  |
-|----------+--------------|
-| =sum=      | Sum numbers  |
-| =min=      | Minimum      |
-| =max=      | Maximum      |
-| =avg=      | Average (returns float) |
+** Aggregation (fused fold — no materialization)
+| Function | Description              |
+|----------+--------------------------|
+| =sum=    | Sum numbers              |
+| =min=    | Minimum                  |
+| =max=    | Maximum                  |
+| =avg=    | Average (returns float)  |
 
 ** String
-| Function     | Args | Description                          |
-|--------------+------+--------------------------------------|
-| =lower=       | /none/ | Lowercase (ascii)                  |
-| =upper=       | /none/ | Uppercase (ascii)                  |
-| =trim=        | /none/ | Strip whitespace                   |
-| =truncate=    | n    | Safe truncate to n chars             |
-| =split=       | sep  | Split string (*single char only*)    |
-| =join=        | sep  | Join array with separator            |
+| Function   | Args   | Description                      |
+|------------+--------+----------------------------------|
+| =lower=    | /none/ | Lowercase (ascii)                |
+| =upper=    | /none/ | Uppercase (ascii)                |
+| =trim=     | /none/ | Strip whitespace                 |
+| =truncate= | n     | Safe truncate to n chars         |
+| =split=    | sep    | Split string (*single char only*) |
+| =join=     | sep    | Join array with separator        |
 
 ** Object
-| Function | Args     | Description         |
-|----------+----------+---------------------|
-| =keys=     | /none/   | Keys (insertion order) |
-| =values=   | /none/   | Values              |
-| =pick=     | fields   | Select specific keys |
-| =omit=     | fields   | Remove specific keys |
+| Function | Args   | Description            |
+|----------+--------+------------------------|
+| =keys=   | /none/ | Keys (insertion order)  |
+| =values= | /none/ | Values                 |
+| =pick=   | fields | Select specific keys   |
+| =omit=   | fields | Remove specific keys   |
 
 ** Type
-| Function    | Description           |
-|-------------+-----------------------|
-| =type=        | Returns type name string |
-| =to_string=   | Convert to string     |
-| =to_number=   | Parse string to number |
+| Function    | Description              |
+|-------------+--------------------------|
+| =type=      | Returns type name string |
+| =to_string= | Convert to string       |
+| =to_number= | Parse string to number  |
 
 ** Generator
-| Function | Args     | Description                     |
-|----------+----------+---------------------------------|
-| =range=    | 0 args   | Infinite sequence (0, 1, 2...) |
-| =range=    | 1 arg (n) | [0..n)                        |
-| =range=    | 2 args   | [start..end)                  |
+| Function | Args      | Description                     |
+|----------+-----------+---------------------------------|
+| =range=  | 0 args    | Infinite sequence (0, 1, 2...) |
+| =range=  | 1 arg (n) | [0..n)                         |
+| =range=  | 2 args    | [start..end)                   |
 
 * Parser Details
 
@@ -237,6 +346,7 @@ type t =
   | Array of t list
   | Object of (string * t) list    (* preserves insertion order *)
   | Seq of t Seq.t                 (* lazy, internal only *)
+  | Xd of t * xd                   (* transducer descriptor *)
 #+end_src
 
 ** Truthiness
@@ -273,142 +383,6 @@ error[key_not_found]: key "nme" not found
 Levenshtein distance <= 3 triggers "did you mean?" for both field names and
 function names. If no close match, lists all available options.
 
-* Lazy Sequences
-
-** The Problem
-
-jq uses generators — every expression can yield multiple values. Powerful but
-confusing. Simple "array in, array out" is easier to understand but wastes
-memory: filtering 1M elements to find 5 matches still allocates the full 1M
-array plus the filter result.
-
-** The Solution: Lazy In, Lazy Out
-
-Collections flow through pipelines as OCaml =Seq.t= when the source is lazy,
-and as =list= when the source is eager. The user never sees the difference —
-both print as JSON arrays.
-
-The rule: *if input is =Seq=, output stays =Seq=. If input is =Array=, output
-stays =Array=.* Laziness propagates; eagerness is preserved.
-
-#+begin_src ocaml
-(* In stdlib_fns.ml *)
-let wrap_result input seq =
-  if Value.is_seq input then Value.Seq seq
-  else Value.Array (List.of_seq seq)
-#+end_src
-
-** Which Functions Are Lazy?
-
-| Function   | Lazy? | Notes                                 |
-|------------+-------+---------------------------------------|
-| =where=     | Yes   | =Seq.filter=                           |
-| =map=       | Yes   | =Seq.map=                              |
-| =take=      | Yes   | =Seq.take= — this is the key one      |
-| =skip=      | Yes   | =Seq.drop=                             |
-| =flatten=   | Yes   | =Seq.flat_map=                         |
-| =unique=    | Yes   | =Seq.filter= with hashtable tracking   |
-| =first=     | Yes   | Peeks first element of =Seq=           |
-| =sort_by=   | *No*  | Must realize to sort                   |
-| =group_by=  | *No*  | Must realize to group                  |
-| =reverse=   | *No*  | Must realize to reverse                |
-| =last=      | *No*  | Must realize to find last              |
-| =sum/avg=   | *No*  | Aggregation consumes the sequence      |
-| =count=     | *No*  | Must consume entire sequence            |
-| =range=     | Yes   | 0-arg =range= produces infinite =Seq= |
-
-** How It Works: Pipeline Example
-
-#+begin_src bash
-range | where (. % 2 == 0) | map (. * .) | take 3
-#+end_src
-
-Step by step:
-1. =range= produces =Seq(0, 1, 2, 3, ...)= — nothing computed yet
-2. =where= wraps it in =Seq.filter= — still nothing computed
-3. =map= wraps that in =Seq.map= — still nothing computed
-4. =take 3= wraps in =Seq.take 3= — still nothing computed
-5. Printer calls =Value.realize= which calls =List.of_seq=
-6. *Now* it pulls 3 values through the chain: 0, 4, 16
-7. Only 6 elements of the infinite range were ever examined
-
-** The Initial Problem (What Was Broken)
-
-The first implementation had =Seq.t= in the value type but =implicit_iter=
-eagerly converted everything to lists:
-
-#+begin_src ocaml
-(* BROKEN: old implicit_iter — kills laziness *)
-let implicit_iter input f =
-  match input with
-  | Value.Array xs -> Value.Array (f xs)
-  | Value.Seq s -> Value.Array (f (List.of_seq s))   (* <-- realizes! *)
-  | _ -> Error.raise_ ...
-#+end_src
-
-=range | take 5= would error with "take requires array, got sequence" because
-=take= only accepted =Array=, not =Seq=. Infinite pipelines were impossible.
-
-** The Fix
-
-Replaced =implicit_iter= (which forced everything to lists) with =Seq=-aware
-dispatch. Each collection function now works on =Seq.t= directly:
-
-#+begin_src ocaml
-(* FIXED: where preserves Seq *)
-| "where", [ pred ] ->
-  require_collection "where" input loc;
-  let s = Value.to_seq input in
-  let filtered = Seq.filter (fun item -> ...) s in
-  wrap_result input filtered    (* Seq in -> Seq out *)
-#+end_src
-
-=wrap_result= checks the original input type: if it was =Seq=, return =Seq=.
-If it was =Array=, realize and return =Array=. This means arrays still behave
-exactly as before (no regression), while sequences stay lazy.
-
-** Benchmark Results
-
-#+begin_src
---- take 10 from different input sizes ---
-  eager 10K array | take 10:    0.9ms    1,167 KB allocated
-  eager 100K array | take 10:   24ms    22,098 KB allocated
-  eager 1M array | take 10:    256ms   225,069 KB allocated
-  lazy  infinite | take 10:   0.02ms       24 KB allocated
-
---- filter + take 5 ---
-  eager 1M array | where | take 5:  285ms  318,822 KB allocated
-  lazy  infinite | where | take 5: 0.02ms       27 KB allocated
-#+end_src
-
-Eager allocation scales linearly with input size (must parse the entire JSON
-array). Lazy is constant: 24 KB regardless of conceptual source size.
-
-** Remaining Limitations
-
-*** Aggregation Allocation
-=sum= over lazy sequences still allocates O(n) — each =Value.Int= wrapper
-costs words as =Seq.fold_left= traverses the thunks. True O(1) would need a
-fused numeric fold that unpacks values during iteration. Currently:
-
-#+begin_src
-  range | take 1M | sum:  17ms  234,417 KB allocated
-#+end_src
-
-Not terrible, but not the constant-memory ideal.
-
-*** JSON Input Is Eager
-=yojson= parses the entire JSON file into memory. Lazy sequences only help
-with generated data (=range=) and intermediate pipeline steps. A streaming
-JSON parser (SAX-style) would be needed to lazily process large JSON files
-from disk. This is a Phase 2+ feature.
-
-*** Inherently Eager Operations
-=sort_by=, =group_by=, =reverse=, =last= must see all elements. They call
-=List.of_seq= internally, realizing the entire sequence. This is correct
-behavior — you cannot sort an infinite sequence. Using these on =range=
-without =take= will hang.
-
 * Known Limitations & Cuts
 
 ** Parser
@@ -420,17 +394,6 @@ without =take= will hang.
 - =dispatch_ref= mutable is a hack for cyclic dependency
 - Cross-type =value_compare= falls back to comparing type name strings
 - No tail-call optimization for deep pipelines
-
-** Lazy Sequences (Remaining Gaps)
-Lazy sequences are implemented and working. See "Lazy Sequences" section
-below for full details. Remaining gaps:
-- =sum= over lazy seqs still allocates O(n) due to =Value.t= wrapper per
-  element in the =Seq.fold_left=. True O(1) would need fused numeric fold.
-- JSON input is still parsed eagerly into memory. Lazy sequences only help
-  with generated data (=range=) and pipeline transformations. Streaming JSON
-  parser would be needed for true streaming from disk.
-- =sort_by=, =group_by=, =reverse=, =last= always realize the full sequence
-  (inherently non-lazy operations).
 
 ** Stdlib Gaps
 Not implemented (mentioned in plan):
@@ -463,15 +426,16 @@ Not implemented (mentioned in plan):
 
 * Dependencies
 
-| Package    | Version | Purpose                        |
-|------------+---------+--------------------------------|
-| ocaml      | >= 5.4  | Language                       |
-| dune       | >= 3.17 | Build system                   |
-| cmdliner   | >= 1.3  | CLI argument parsing           |
-| sedlex     |         | Unicode-aware lexer            |
-| yojson     | >= 2.0  | JSON parsing and output        |
-| alcotest   |         | Test framework (test only)     |
-| ocamlformat | 0.27.0 | Code formatting (dev only)    |
+| Package     | Version | Purpose                       |
+|-------------+---------+-------------------------------|
+| ocaml       | >= 5.4  | Language                      |
+| dune        | >= 3.17 | Build system                  |
+| cmdliner    | >= 1.3  | CLI argument parsing          |
+| sedlex      |         | Unicode-aware lexer           |
+| yojson      | >= 2.0  | JSON parsing (output removed) |
+| unix        |         | Profiling timer               |
+| alcotest    |         | Test framework (test only)    |
+| ocamlformat | 0.27.0  | Code formatting (dev only)    |
 
 * Build & Run
 
@@ -490,10 +454,11 @@ dune build @runtest
 # Run
 echo '{"name":"Alice"}' | dune exec bin/main.exe -- '.name'
 
-# Or with make
-make build
-make test
-make run ARGS="'.name' test.json"
+# Profile
+JX_PROFILE=1 ./_build/default/bin/main.exe '.' bench/data/large.json > /dev/null
+
+# Benchmark
+bash bench/run.sh    # requires hyperfine
 #+end_src
 
 * Comparison with jq
@@ -541,3 +506,4 @@ query-json source at =~/repos/query-json/= — used as reference for:
 - Error formatting approach (caret pointers)
 - Interpreter patterns (eval function dispatch)
 - Stdlib function naming conventions
+- Forked Yojson ("jotason") — lexer position tracking disabled for 31% speedup
