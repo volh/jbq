@@ -1,0 +1,5 @@
+(library
+ (name jx)
+ (libraries yojson sedlex)
+ (preprocess
+  (pps sedlex.ppx)))
