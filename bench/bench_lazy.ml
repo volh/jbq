@@ -1,4 +1,6 @@
-let () = Jx.Interpreter.dispatch_ref := Jx.Stdlib_fns.dispatch
+let () =
+  Jx.Interpreter.dispatch_ref := Jx.Stdlib_fns.dispatch;
+  Jx.Value.xd_run_ref := Jx.Transducer.run
 
 let run query json_str =
   let json = Yojson.Basic.from_string json_str in

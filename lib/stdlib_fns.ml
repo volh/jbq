@@ -12,28 +12,72 @@ let as_seq input =
   match input with
   | Value.Array xs -> List.to_seq xs
   | Value.Seq s -> s
+  | Value.Xd (source, xd) ->
+    List.to_seq (!Value.xd_run_ref xd (Value.to_seq source))
   | _ -> Seq.return input
 
-let wrap_result _input seq = Value.Seq seq
+let fold_collection f init input =
+  match input with
+  | Value.Xd (source, xd) ->
+    Transducer.fold xd f init (Value.to_seq source)
+  | _ ->
+    Seq.fold_left f init (as_seq input)
+
+let xd_compose input new_xd =
+  match input with
+  | Value.Xd (source, existing) ->
+    Value.Xd (source, Transducer.compose existing new_xd)
+  | _ -> Value.Xd (input, new_xd)
+
+let realize_input input =
+  match input with
+  | Value.Xd (source, xd) ->
+    Value.Array (!Value.xd_run_ref xd (Value.to_seq source))
+  | Value.Seq s -> Value.Array (List.of_seq s)
+  | v -> v
 
 let dispatch env input name args loc =
   match (name, args) with
-  (* === Collection functions === *)
+  (* === Transducible collection functions === *)
   | "where", [ pred ] ->
     require_collection "where" input loc;
-    let s = Value.to_seq input in
-    let filtered =
-      Seq.filter (fun item -> Value.is_truthy (eval_in_ctx env item pred)) s
-    in
-    wrap_result input filtered
+    let xd = Transducer.filter
+      (fun item -> Value.is_truthy (eval_in_ctx env item pred)) in
+    xd_compose input xd
   | "map", [ expr ] ->
     require_collection "map" input loc;
-    let s = Value.to_seq input in
-    let mapped = Seq.map (fun item -> eval_in_ctx env item expr) s in
-    wrap_result input mapped
+    let xd = Transducer.map
+      (fun item -> eval_in_ctx env item expr) in
+    xd_compose input xd
+  | "unique", [] ->
+    require_collection "unique" input loc;
+    let xd = Transducer.unique
+      (fun item -> Yojson.Basic.to_string (Value.to_yojson item)) in
+    xd_compose input xd
+  | "flatten", [] ->
+    require_collection "flatten" input loc;
+    xd_compose input Transducer.flatten
+  | "take", [ n_expr ] ->
+    let n =
+      match eval_in_ctx env input n_expr with
+      | Value.Int n -> n
+      | _ -> Error.raise_ ~loc Type_mismatch "take requires integer argument"
+    in
+    require_collection "take" input loc;
+    xd_compose input (Transducer.take n)
+  | "skip", [ n_expr ] ->
+    let n =
+      match eval_in_ctx env input n_expr with
+      | Value.Int n -> n
+      | _ -> Error.raise_ ~loc Type_mismatch "skip requires integer argument"
+    in
+    require_collection "skip" input loc;
+    xd_compose input (Transducer.skip n)
+
+  (* === Eager collection functions (realize first) === *)
   | "sort_by", [ expr ] ->
     require_collection "sort_by" input loc;
-    let xs = List.of_seq (Value.to_seq input) in
+    let xs = Value.to_list_exn (realize_input input) in
     let sorted =
       List.sort
         (fun a b ->
@@ -45,10 +89,10 @@ let dispatch env input name args loc =
     Value.Array sorted
   | "group_by", [ expr ] ->
     require_collection "group_by" input loc;
-    let s = Value.to_seq input in
+    let xs = Value.to_list_exn (realize_input input) in
     let groups = Hashtbl.create 16 in
     let order = ref [] in
-    Seq.iter
+    List.iter
       (fun item ->
         let key = eval_in_ctx env item expr in
         let key_str = Interpreter.value_to_string key in
@@ -59,79 +103,41 @@ let dispatch env input name args loc =
           | None -> []
         in
         Hashtbl.replace groups key_str (existing @ [ item ]))
-      s;
+      xs;
     Value.Object
       (List.rev !order
       |> List.map (fun k -> (k, Value.Array (Hashtbl.find groups k))))
-  | "unique", [] ->
-    require_collection "unique" input loc;
-    let s = Value.to_seq input in
-    let seen = Hashtbl.create 16 in
-    let filtered =
-      Seq.filter
-        (fun item ->
-          let s = Yojson.Basic.to_string (Value.to_yojson item) in
-          if Hashtbl.mem seen s then false
-          else (
-            Hashtbl.replace seen s ();
-            true))
-        s
-    in
-    wrap_result input filtered
-  | "flatten", [] ->
-    require_collection "flatten" input loc;
-    let s = Value.to_seq input in
-    let flattened =
-      Seq.flat_map
-        (fun item ->
-          match item with
-          | Value.Array inner -> List.to_seq inner
-          | Value.Seq inner -> inner
-          | _ -> Seq.return item)
-        s
-    in
-    wrap_result input flattened
   | "reverse", [] ->
     require_collection "reverse" input loc;
-    let xs = List.of_seq (Value.to_seq input) in
+    let xs = Value.to_list_exn (realize_input input) in
     Value.Array (List.rev xs)
 
   (* === Slicing === *)
   | "first", [] -> (
     require_collection "first" input loc;
-    let s = Value.to_seq input in
-    match s () with
-    | Seq.Cons (x, _) -> x
-    | Seq.Nil -> Error.raise_ ~loc Runtime_error "first on empty collection")
+    let result = match input with
+      | Value.Xd (source, xd) ->
+        let xd' = Transducer.compose xd (Transducer.take 1) in
+        !Value.xd_run_ref xd' (Value.to_seq source)
+      | _ ->
+        let s = Value.to_seq input in
+        (match s () with
+         | Seq.Cons (x, _) -> [x]
+         | Seq.Nil -> [])
+    in
+    match result with
+    | [x] -> x
+    | _ -> Error.raise_ ~loc Runtime_error "first on empty collection")
   | "last", [] ->
     require_collection "last" input loc;
-    let xs = List.of_seq (Value.to_seq input) in
+    let xs = Value.to_list_exn (realize_input input) in
     (match xs with
     | [] -> Error.raise_ ~loc Runtime_error "last on empty collection"
     | _ -> List.nth xs (List.length xs - 1))
-  | "take", [ n_expr ] ->
-    let n =
-      match eval_in_ctx env input n_expr with
-      | Value.Int n -> n
-      | _ -> Error.raise_ ~loc Type_mismatch "take requires integer argument"
-    in
-    require_collection "take" input loc;
-    let s = Value.to_seq input in
-    let taken = Seq.take n s in
-    wrap_result input taken
-  | "skip", [ n_expr ] ->
-    let n =
-      match eval_in_ctx env input n_expr with
-      | Value.Int n -> n
-      | _ -> Error.raise_ ~loc Type_mismatch "skip requires integer argument"
-    in
-    require_collection "skip" input loc;
-    let s = Value.to_seq input in
-    let skipped = Seq.drop n s in
-    wrap_result input skipped
   | "count", [] -> (
     match input with
     | Value.Array xs -> Value.Int (List.length xs)
+    | Value.Xd _ -> Value.Int (fold_collection (fun n _ -> n + 1) 0 input)
     | Value.Seq s -> Value.Int (Seq.fold_left (fun acc _ -> acc + 1) 0 s)
     | Value.Object kvs -> Value.Int (List.length kvs)
     | Value.String s -> Value.Int (String.length s)
@@ -140,16 +146,16 @@ let dispatch env input name args loc =
   | "length", [] -> (
     match input with
     | Value.Array xs -> Value.Int (List.length xs)
+    | Value.Xd _ -> Value.Int (fold_collection (fun n _ -> n + 1) 0 input)
     | Value.Seq s -> Value.Int (Seq.fold_left (fun acc _ -> acc + 1) 0 s)
     | Value.Object kvs -> Value.Int (List.length kvs)
     | Value.String s -> Value.Int (String.length s)
     | Value.Null -> Value.Int 0
     | _ -> Value.Int 1)
 
-  (* === Aggregation (always realizes) === *)
+  (* === Aggregation (fused fold — no materialization) === *)
   | "sum", [] ->
-    let s = as_seq input in
-    Seq.fold_left
+    fold_collection
       (fun acc item ->
         match (acc, item) with
         | Value.Int a, Value.Int b -> Value.Int (a + b)
@@ -158,31 +164,30 @@ let dispatch env input name args loc =
         | Value.Float a, Value.Float b -> Value.Float (a +. b)
         | _ ->
           Error.raise_ ~loc Type_mismatch "sum requires numeric elements")
-      (Value.Int 0) s
+      (Value.Int 0) input
   | "min", [] -> (
-    let s = as_seq input in
-    match s () with
-    | Seq.Nil -> Error.raise_ ~loc Runtime_error "min on empty collection"
-    | Seq.Cons (first, rest) ->
-      Seq.fold_left
+    let items = Value.to_list_exn (realize_input input) in
+    match items with
+    | [] -> Error.raise_ ~loc Runtime_error "min on empty collection"
+    | first :: rest ->
+      List.fold_left
         (fun acc item ->
           if Interpreter.value_compare item acc < 0 then item else acc)
         first rest)
   | "max", [] -> (
-    let s = as_seq input in
-    match s () with
-    | Seq.Nil -> Error.raise_ ~loc Runtime_error "max on empty collection"
-    | Seq.Cons (first, rest) ->
-      Seq.fold_left
+    let items = Value.to_list_exn (realize_input input) in
+    match items with
+    | [] -> Error.raise_ ~loc Runtime_error "max on empty collection"
+    | first :: rest ->
+      List.fold_left
         (fun acc item ->
           if Interpreter.value_compare item acc > 0 then item else acc)
         first rest)
   | "avg", [] ->
-    let s = as_seq input in
     let total, n =
-      Seq.fold_left
+      fold_collection
         (fun (total, n) item -> (total +. Value.to_float_exn item, n + 1))
-        (0.0, 0) s
+        (0.0, 0) input
     in
     if n = 0 then Error.raise_ ~loc Runtime_error "avg on empty collection"
     else Value.Float (total /. Float.of_int n)
