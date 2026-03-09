@@ -1,0 +1,145 @@
+#+TITLE: Schema Implementation Plan
+#+DATE: 2026-03-10
+
+* Overview
+
+Add =--schema= flag that outputs JSON Schema (draft 2020-12) inferred from
+input data. Full scan of all elements by default — no sampling unless
+explicitly requested via =-n N=.
+
+Output is =Value.t= rendered through existing printer. No new dependencies.
+
+* Implementation Steps
+
+** DONE 1. Create =lib/schema.ml= — internal schema type and inference
+
+Internal representation for intermediate merging:
+
+#+begin_src ocaml
+type schema =
+  | SNull | SBoolean | SInteger | SNumber | SString
+  | SArray of schema       (* items schema *)
+  | SObject of obj_schema
+  | SOneOf of schema list  (* heterogeneous types *)
+  | SEmpty                 (* empty array — unknown items *)
+
+and obj_schema = {
+  properties : (string * schema) list;  (* union of all keys seen *)
+  required : string list;               (* keys present in every element *)
+  count : int;                          (* number of elements merged *)
+}
+#+end_src
+
+Core functions:
+
+- =infer : Value.t -> schema= — walk a single value, produce its schema
+- =merge : schema -> schema -> schema= — merge two schemas (for array elements)
+- =merge_objects : obj_schema -> obj_schema -> obj_schema= — merge two object schemas
+- =to_value : schema -> Value.t= — convert schema to JSON Schema as =Value.t=
+
+Merge rules:
+- identical types → keep
+- =SInteger + SNumber= → =SNumber= (widen)
+- =SNull + T= → =SOneOf [T; SNull]=
+- =SOneOf xs + T= → =SOneOf (T :: xs)= if T not already present
+- =SObject + SObject= → merge properties, intersect required
+- =SArray a + SArray b= → =SArray (merge a b)=
+- anything else → =SOneOf [a; b]=
+
+Object merge:
+- properties = union of keys; for shared keys, merge their schemas
+- required = intersection (keys in both + both required sets)
+- count = sum of counts
+
+** DONE 2. Handle =Seq= and =Xd= in schema inference
+
+=infer= dispatches on Array/Seq/Xd via =infer_seq=, folding through
+elements with =merge= to accumulate a merged item schema.
+
+** DONE 3. Convert internal schema to JSON Schema =Value.t=
+
+=to_value : schema -> Value.t= mapping:
+
+| Internal         | JSON Schema output                                    |
+|------------------+-------------------------------------------------------|
+| =SNull=          | ={"type": "null"}=                                    |
+| =SBoolean=       | ={"type": "boolean"}=                                 |
+| =SInteger=       | ={"type": "integer"}=                                 |
+| =SNumber=        | ={"type": "number"}=                                  |
+| =SString=        | ={"type": "string"}=                                  |
+| =SEmpty=         | ={"type": "array"}=                                   |
+| =SArray SEmpty=  | ={"type": "array"}= (no items for unknown)            |
+| =SArray items=   | ={"type": "array", "items": <items schema>}=          |
+| =SObject obj=    | ={"type": "object", "properties": ..., "required": ...}= |
+| =SOneOf schemas= | ={"oneOf": [<schema>, ...]}=                          |
+
+=required= only emitted when non-empty.
+
+** DONE 4. Wire =--schema= and =-n= flags into =bin/main.ml=
+
+- =--schema= cmdliner flag (boolean)
+- =-n N= cmdliner optional int (default: 0 = scan all)
+- When =--schema= set:
+  - Parse JSON as normal (simdjson)
+  - Eval query on input (works with any query, not just =.=)
+  - Call =Schema.infer= (or =Schema.infer_sampled ~n=) on the result
+  - Convert to =Value.t= via =Schema.to_value=
+  - Print via existing =Printer.to_json=
+
+** DONE 5. Add tests for schema inference
+
+20 test cases in =test/test_jx.ml= under ="schema"= group:
+
+1. Scalar types: null, bool, int, float, string (5 tests)
+2. Simple object with required fields
+3. Nested object
+4. Homogeneous array
+5. Array of objects: property merge, required intersection
+6. Nullable field: int + null → oneOf
+7. Missing field: not in required
+8. Heterogeneous array: int + string + null → oneOf
+9. Empty array → ={"type": "array"}=
+10. Empty object → object with empty properties
+11. Array of arrays
+12. Int/float widening to number
+13. Nested object merge (zip present in one, absent in other)
+14. Schema after query evaluation (=map {name}=)
+15. Sampled mode (=-n 2=)
+16. BigInt maps to integer
+
+** DONE 6. Limit mode (=-n N=)
+
+=-n N= limits schema inference to first N array elements.
+Implemented via =infer_sampled ~n= which uses =Seq.take n= before folding.
+
+* Performance Notes
+
+- Schema walk is O(total elements * average fields per element).
+  For 100K records with 8 fields, ~800K type comparisons. Estimated 10-50ms.
+- Still pays full simdjson parse cost.
+- Output is tiny (tens of bytes for typical schemas). Output cost ≈ 0.
+- Net: schema is always faster than identity because output stage is near-zero.
+  The expensive stage (parse) is the same.
+- Future: streaming schema (iterate simdjson stream, infer per element,
+  stop at N) could skip parse entirely on large arrays. Not in this PR.
+
+* File Changes
+
+| File              | Change                                     |
+|-------------------+--------------------------------------------|
+| =lib/schema.ml=   | New module — 170 lines, schema inference   |
+| =bin/main.ml=     | Add --schema and -n flags, schema output   |
+| =test/test_jx.ml= | Add 20 schema tests, 108 total tests pass  |
+
+* Results
+
+108/108 tests passing. =--schema= works with:
+- All scalar types
+- Objects (simple and nested)
+- Arrays (homogeneous, heterogeneous, nested)
+- Nullable and missing fields
+- Int/float widening
+- BigInt
+- Query scoping (=jx '.users' --schema=)
+- Sampling (=-n 10=)
+- Compact output (=-c=)
