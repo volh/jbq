@@ -8,6 +8,14 @@ let run query json_str =
 
 let run_null query = run query "null"
 
+let run_preparse query input =
+  let ast = Jx.Parser.parse query in
+  Jx.Interpreter.eval [] input ast
+
+let preparse json_str =
+  let json = Yojson.Basic.from_string json_str in
+  Jx.Value.of_yojson json
+
 let time_it label f =
   Gc.compact ();
   let stat_before = Gc.stat () in
@@ -107,6 +115,44 @@ let () =
 
   ignore (time_it "lazy  range | map(.*.) | where(%3==0) | take 10 | avg"
     (fun () -> run_null "range | map (. * .) | where (. % 3 == 0) | take 10 | avg"));
+
+  (* --- Test 6: Pipeline-only cost (pre-parsed input) --- *)
+  Printf.printf "\n--- Pipeline-only (input pre-parsed, no JSON overhead) ---\n\n";
+
+  let pre_10k = preparse (big_array 10_000) in
+  let pre_100k = preparse (big_array 100_000) in
+  let pre_1m = preparse (big_array 1_000_000) in
+
+  ignore (time_it "10K  pre-parsed | where (. > n-10) | take 5"
+    (fun () -> run_preparse (Printf.sprintf "where (. > %d) | take 5" (10_000 - 10)) pre_10k));
+
+  ignore (time_it "100K pre-parsed | where (. > n-10) | take 5"
+    (fun () -> run_preparse (Printf.sprintf "where (. > %d) | take 5" (100_000 - 10)) pre_100k));
+
+  ignore (time_it "1M   pre-parsed | where (. > n-10) | take 5"
+    (fun () -> run_preparse (Printf.sprintf "where (. > %d) | take 5" (1_000_000 - 10)) pre_1m));
+
+  Printf.printf "\n";
+
+  ignore (time_it "10K  pre-parsed | map (. * 2) | take 5"
+    (fun () -> run_preparse "map (. * 2) | take 5" pre_10k));
+
+  ignore (time_it "100K pre-parsed | map (. * 2) | take 5"
+    (fun () -> run_preparse "map (. * 2) | take 5" pre_100k));
+
+  ignore (time_it "1M   pre-parsed | map (. * 2) | take 5"
+    (fun () -> run_preparse "map (. * 2) | take 5" pre_1m));
+
+  Printf.printf "\n";
+
+  ignore (time_it "10K  pre-parsed | where | map | take 3"
+    (fun () -> run_preparse "where (. > 5000) | map (. * .) | take 3" pre_10k));
+
+  ignore (time_it "100K pre-parsed | where | map | take 3"
+    (fun () -> run_preparse "where (. > 50000) | map (. * .) | take 3" pre_100k));
+
+  ignore (time_it "1M   pre-parsed | where | map | take 3"
+    (fun () -> run_preparse "where (. > 500000) | map (. * .) | take 3" pre_1m));
 
   Printf.printf "\n==========================================================\n";
   Printf.printf "  Done.\n";

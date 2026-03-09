@@ -14,9 +14,7 @@ let as_seq input =
   | Value.Seq s -> s
   | _ -> Seq.return input
 
-let wrap_result input seq =
-  if Value.is_seq input then Value.Seq seq
-  else Value.Array (List.of_seq seq)
+let wrap_result _input seq = Value.Seq seq
 
 let dispatch env input name args loc =
   match (name, args) with
