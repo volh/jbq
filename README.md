@@ -14,7 +14,10 @@ items | where .price > 100 | map {name, display: .name | lower | truncate 20}
 
 ## Install
 
-Requires OCaml 5.4+ and opam.
+Requires:
+- OCaml 5.4+
+- opam
+- a system simdjson installation (headers + shared library)
 
 ```bash
 opam install . --deps-only --with-test -y
@@ -99,6 +102,9 @@ bind when attached to the expression they extend.
 .first ++ " " ++ .last  # string concat (not +)
 .email ?? "none"         # null coalescing
 ```
+
+Large integers are preserved exactly. Integer-only arithmetic stays exact even
+past native `int` range.
 
 ### Conditionals and let bindings
 
@@ -201,9 +207,11 @@ items | map (x => {name: x.name, total: x.price * x.qty})
 
 jq is battle-tested, ubiquitous, and its streaming model handles arbitrarily large input. The `@base64`, `@uri`, `@csv` format strings are genuinely useful. `--slurp` and `--jsonargs` cover real CLI needs. jx doesn't aim to replace all of that on day one.
 
-Streaming status: the current CLI reads the full JSON input into memory and
-parses it before evaluation. Top-level array streaming is planned, but it is
-not implemented yet.
+Current parser status:
+- `jx` now uses a native simdjson-based input path by default
+- top-level array queries that fit the supported pipeline subset use a streamed
+  `Value.Seq` path
+- other inputs fall back to a full native `Value.t` parse
 
 ### Where jx diverges
 
@@ -249,7 +257,7 @@ make clean        # clean build artifacts
 ## Architecture
 
 ```
-Input -> Lexer (sedlex) -> Parser (Pratt, attached postfix syntax) -> AST -> Interpreter (Seq.t lazy eval) -> JSON output
+Input -> simdjson native parser -> Value.t / Value.Seq -> Lexer (sedlex) -> Parser (Pratt) -> Interpreter -> JSON output
 ```
 
 Written in OCaml. MIT license.

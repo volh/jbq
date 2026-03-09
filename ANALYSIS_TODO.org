@@ -1,178 +1,88 @@
-#+TITLE: jx as jq Replacement - TODO Report
+#+TITLE: jx as jq Replacement - Remaining Work
 #+DATE: 2026-03-09
 
-* Current Assessment
+* Current State
 
-- [ ] Reach true jq-replacement status on both semantics and performance.
-  Parser semantics are much stronger after the Pratt parser rewrite and the
-  attached-postfix rule, but jx is still behind jq on large-input performance
-  and still lacks streaming input.
+- [X] Replace the Yojson input path with a native simdjson path.
+- [X] Add top-level array streaming for compatible query shapes.
+- [X] Preserve huge integers exactly with =BigInt of Z.t=.
+- [X] Add exact integer arithmetic for =Int= / =BigInt= values.
+- [X] Reach parity with jq on identity-class workloads.
+  Current result is near parity, with jq still slightly ahead.
+- [X] Beat jq on early-exit and single-pass reduction workloads.
+  =where ... | take 5=, =count=, and =map .price | sum= all beat jq on the
+  current benchmark data.
 
-- [ ] Preserve the language advantage while hardening the runtime.
-  The language remains the differentiator: readable pipes, strict null
-  handling, punning, and named collection operators are easier to teach and
-  reason about than jq's generator-heavy model.
+* Verified Wins
 
-- [ ] Keep the performance discussion grounded in current measurements.
-  Verified locally on 2026-03-09:
-  - xlarge identity: jx 720.8 ms vs jq 481.2 ms (jq 1.50x faster)
-  - xlarge early-exit query: jx 397.0 ms vs jq 225.7 ms (jq 1.76x faster)
-  - JX_PROFILE=1 identity: ~295 ms yojson parse + ~98 ms of_yojson convert
+- [X] Early-exit root-array pipelines are dramatically faster than jq.
+- [X] Full-array reductions are materially faster than jq.
+- [X] Identity is no longer catastrophically parse-bound as it was with Yojson.
+- [X] Big integer literals and arithmetic are better than jq's float-based math.
 
-* Recently Completed
+* Still Open
 
-- [X] Fix operator associativity in the parser.
-  The parser now uses a Pratt expression parser and the old right-associative
-  bugs in =-=, =/=, =%=, and =++= are gone.
-
-- [X] Add regression tests for associativity and precedence edge cases.
-  Tests now cover left associativity, precedence, and parser behavior around
-  implicit function arguments and spaced postfix syntax.
-
-- [X] Resolve dotted-argument ambiguity for implicit function args.
-  =pick .name .email= now means two arguments. Postfix operators bind only
-  when attached to the expression they extend.
-
-- [X] Reconcile docs with the current parser and syntax behavior.
-  README and context docs now describe the Pratt parser and the
-  whitespace-sensitive postfix rule.
-
-- [X] Add an explicit README note about streaming not being implemented yet.
-  The current CLI still reads and parses the full input before evaluation, and
-  the README now says so directly.
-
-* Highest-ROI Remaining Work
-
-- [X] Rewrite =group_by= to avoid =existing @ [item]=.
-  Done with prepend + reverse storage. Measured impact:
-  - synthetic =range 50000 | map {k: . % 10, v: .} | group_by .k | count=
-    improved by ~39x old vs new
-  - real JSON benchmark shape still remains parse/output dominated
-
-- [X] Rewrite =sort_by= to cache keys.
-  Done via decorate-sort-undecorate. Measured impact:
-  - xlarge =sort_by .price= improved by ~1.55x old vs new
-
-- [X] Rewrite =unique= to avoid JSON-string serialization for hashing.
-  Done with structural keys over realized values. Measured impact:
-  - synthetic =range 100000 | map (. % 1000) | unique | count=
-    improved by ~1.14x old vs new
-  - real JSON benchmark shape is mostly parse dominated, so the win is muted
-
-- [X] Review printer paths for duplicate traversal.
-  Attempted once, then reverted because the direct old-vs-new identity
-  benchmark did not justify keeping the change. Decision: defer further
-  printer work until the larger input-path/runtime questions are settled.
-
-- [X] Re-profile and re-benchmark after the safe runtime fixes.
-  Done. Current measured state:
-  - xlarge identity: ~1.02x faster old vs new
-  - xlarge sort_by: ~1.55x faster old vs new
-  - synthetic unique/count: ~1.14x faster old vs new
-  - synthetic group_by/count: ~39x faster old vs new
-
-- [ ] Implement top-level array streaming into the transducer pipeline.
-  This is the change that can make early-exit queries genuinely competitive or
-  faster than jq. Right now =where ... | take 5= still pays full parse cost.
-
-- [ ] Define success metrics for the streaming work.
-  For large arrays, queries like:
-  - =take 5=
-  - =where .price > 400 | take 5=
-  - range-like folds over large inputs
-  should scale with consumed output, not full input size.
-
-* Deferred / High-Risk Work
-
-- [ ] Replace the Yojson intermediate tree with a direct parser into =Value.t=
-  only if the remaining benchmark gap justifies owning JSON parsing.
-  Current flow is: file -> string -> =Yojson.Basic.t= -> =Value.t=.
-  This is still potentially a large win, but it should not ship without:
-  - differential testing against the current parser
-  - malformed-input tests
-  - Unicode/escape coverage
-  - deep nesting tests
-  - profiling before/after to prove the gain
-
-- [ ] Keep profiling before and after any direct parser experiment.
-  Target outcome:
-  - remove the =of_yojson convert= stage entirely
-  - reduce total parse-side allocation
-  - lower the fixed input floor for all queries
-
-* Runtime Representation Work
+** Runtime Representation
 
 - [ ] Replace list-backed arrays with a representation optimized for indexing.
-  Arrays are currently =t list=, which makes indexing O(n), length checks
-  frequent, and memory locality poor compared with arrays or chunked vectors.
+  Arrays are still =t list=. This keeps indexing O(n) and hurts locality.
 
 - [ ] Replace list-backed objects with a representation optimized for lookup.
-  Objects are currently =(string * t) list=, which makes field access O(n).
-  A jq-like workload performs large numbers of repeated field lookups.
+  Objects are still =(string * t) list=. Repeated field access is still O(n).
 
 - [ ] Consider an ordered object representation with a side index.
   Desired properties:
   - preserve insertion order for printing and =keys=
-  - offer fast lookup for =.field=
-  - avoid paying hash-map overhead on every tiny object if possible
+  - fast =.field= lookup
+  - avoid unnecessary hashing overhead for tiny objects
 
-- [ ] Reduce avoidable realization of lazy values.
-  =Seq= and =Xd= are often converted to lists or arrays at boundaries. The lazy
-  execution model helps, but too many paths still force materialization.
+** Streaming Coverage
 
-* Evaluation Model
+- [ ] Expand the streamed top-array path to cover more query shapes if the
+  complexity stays reasonable.
 
-- [X] Preserve the transducer design.
-  This remains one of the strongest implementation choices in the project.
-  Fused =where | map | take | sum= pipelines are the right direction.
+- [ ] Decide whether some fully realizing queries should skip the stream path.
+  Identity is near-parity, but not a clear win over jq.
 
-- [X] Keep evaluation cost separate from input cost in profiling.
-  =JX_PROFILE= already gives a useful split between read, parse, convert,
-  eval, and output stages.
+** Build / Portability
 
-- [ ] Push more operations into fused execution where semantically possible.
-  Today =sort_by=, =group_by=, =reverse=, =last=, and some printer paths force
-  realization. Some of that is inherent, but some boundary materialization can
-  still be reduced.
+- [ ] Improve the simdjson dependency story.
+  Current build assumes a system-installed simdjson library and headers.
+  Options:
+  - vendor simdjson
+  - use pkg-config
+  - document platform requirements more explicitly
 
-* Product Positioning
+** Benchmarks / Observability
 
-- [ ] Keep marketing the language, not only the benchmark gap.
-  The strongest story is still:
-  - more readable than jq
-  - more regular syntax
-  - easier to learn
-  - fewer semantic surprises
+- [ ] Refresh =BENCHMARKS.org= to reflect the current default parser/runtime.
+- [ ] Refresh =context.org= and README whenever the benchmark picture changes.
+- [ ] Add a stable benchmark command set for:
+  - identity
+  - take 5
+  - count
+  - sum
+  - sort_by
+  - group_by
 
-- [ ] Avoid claiming jq parity before streaming and direct-parser work lands.
-  Parser correctness work has landed, but the runtime/performance caveats are
-  still real.
+** Documentation
 
-- [ ] Treat correctness and performance as equally important for adoption.
-  A jq replacement must be trusted first, then optimized.
+- [ ] Decide whether to keep =SIMDJSON_CLAIM_AUDIT.org= in-tree long-term.
+- [ ] Decide whether to keep =SIMDJSON_IMPLEMENTATION.org= as a permanent design
+  record or fold the useful parts into other docs.
 
-* Revised Execution Order
+* No Longer Needed
 
-- [X] 1. Fix parser associativity bugs and add tests.
-- [X] 2. Optimize =group_by=, =sort_by=, and =unique=.
-- [X] 3. Re-benchmark against jq / baseline after each runtime change.
-  Done for the safe runtime fixes:
-  - xlarge =sort_by .price=: new is ~1.55x faster than old, jq still ~1.18x faster than new
-  - large =group_by .city=: new is ~1.09x faster than old on the real JSON benchmark shape,
-    jq still ~1.14x faster than new
-  - xlarge =map .city | unique=: synthetic in-process benchmark shows ~1.14x old-vs-new,
-    while jq is still ~1.16x faster than new on the real JSON benchmark shape
-- [X] 4. Decide whether printer traversal work is still worth pursuing.
-- [ ] 5. Introduce top-level array streaming into transducers if the remaining
-  gap justifies parser/input-path work.
-- [ ] 6. Revisit direct JSON -> =Value.t= parsing only with a correctness plan.
-- [ ] 7. Rework array/object runtime representation if measurement still
-  shows lookup/indexing costs dominating after the simpler fixes.
+- [X] Replace Yojson with a direct parser into =Value.t=.
+- [X] Add a streaming top-level array parser.
+- [X] Fix parser associativity bugs and ambiguity around implicit args.
+- [X] Remove the JSON-string hashing path from =unique=.
+- [X] Cache keys in =sort_by=.
+- [X] Remove quadratic append behavior in =group_by=.
 
-* Target End State
+* Priority Order
 
-- [ ] Language remains simpler and more readable than jq.
-- [ ] Identity and common map/filter workloads reach near-parity with jq.
-- [ ] Early-exit queries beat jq on large top-level arrays through streaming.
-- [ ] Large-file behavior matches documentation.
-- [ ] Benchmark claims are backed by repeatable measurements and stable semantics.
+- [ ] 1. Runtime representation (arrays / objects)
+- [ ] 2. Build / portability cleanup for simdjson
+- [ ] 3. Benchmark/doc refresh
+- [ ] 4. Stream-path scope cleanup and tuning

@@ -5,18 +5,26 @@
 
 * Project Overview
 
-jx is a jq replacement with a genuinely better query language. Written in OCaml.
-Not "jq in another language" — a new language for JSON.
+jx is a jq replacement with a genuinely better query language. Written in
+OCaml, with a native simdjson-based JSON input path and an internal lazy
+sequence/transducer runtime.
 
 Every existing "better jq" (jaq, gojq, fq, query-json) kept jq's syntax and
-competed on runtime. jx competes on language design.
+competed on runtime. jx competes on language design *and* now has a native
+input path that materially changes the performance profile.
 
 ** Repository
 =~/dev/sandbox/jx/=
 
 ** Status
-Working prototype. 52/52 tests passing. CLI functional.
-Performance: 1.4-1.7x slower than jq at scale (down from 3.3x).
+Working prototype. 82/82 tests passing. CLI functional.
+
+Current parser/runtime state:
+- simdjson is the default JSON input path
+- top-level array queries use a streamed =Value.Seq= path when the query shape
+  is compatible
+- non-streamed inputs fall back to a full native =Value.t= parse
+- exact big integers are preserved via =BigInt of Z.t=
 
 ** Core Design Rules
 1. =.field= — dot is always data (field access)
@@ -28,19 +36,34 @@ Performance: 1.4-1.7x slower than jq at scale (down from 3.3x).
 #+begin_src
 jx 'items | where .price > 100 | map {name, price}' data.json
 
-  ┌────────┐    ┌────────┐    ┌─────┐    ┌─────────────┐    ┌────────┐
-  │ Lexer  │ -> │ Parser │ -> │ AST │ -> │ Interpreter │ -> │ Output │
-  └────────┘    └────────┘    └─────┘    └─────────────┘    └────────┘
-   sedlex       Pratt                      transducer        direct
-   245 lines    379 lines     58 lines     pipelines         printer
+  ┌────────────┐    ┌────────┐    ┌─────┐    ┌─────────────┐    ┌────────┐
+  │ simdjson   │ -> │ Parser │ -> │ AST │ -> │ Interpreter │ -> │ Output │
+  └────────────┘    └────────┘    └─────┘    └─────────────┘    └────────┘
+   native JSON      Pratt                    transducer        direct
+   parse / stream                            pipelines         printer
 #+end_src
+
+** Input Path
+
+There are now two native input modes in =bin/main.ml=:
+
+1. *Top-level array stream*
+   - enabled automatically when the query shape is compatible
+   - builds a =Value.Seq= from a simdjson top-array iterator
+   - avoids full-array materialization
+
+2. *Full native parse*
+   - used for other inputs/query shapes
+   - constructs =Value.t= directly from simdjson
+
+The old Yojson input path is no longer used in active code.
 
 ** Module Dependency Graph
 #+begin_src
   Ast  <-- Error  <-- Lexer  <-- Parser
    ^                                |
    |                                v
-  Value <-- Interpreter <-------- (parse_expr for interpolation)
+  Value <-- Interpreter <-------- (parse for interpolation)
     ^          ^
     |          | dispatch_ref (mutable)
     |          v
@@ -49,475 +72,168 @@ jx 'items | where .price > 100 | map {name, price}' data.json
     +---- Transducer
     |
   Printer <-- main.ml
+
+  Simdjson_native <-- Simdjson_stream <-- main.ml / tests / benches
 #+end_src
 
-The =dispatch_ref= mutable breaks a cyclic dependency between =Interpreter=
-and =Stdlib_fns=. Interpreter calls stdlib via the ref; =Stdlib_fns= calls
-=Interpreter.eval= directly. One-way dependency at the module level.
-
-=Value.xd_run_ref= similarly breaks the cycle between =Value= and =Transducer=.
+=dispatch_ref= breaks the cycle between =Interpreter= and =Stdlib_fns=.
+=xd_run_ref= breaks the cycle between =Value= and =Transducer=.
 
 * File Inventory
 
-| File               | Lines | Purpose                              |
-|--------------------+-------+--------------------------------------|
-| lib/ast.ml         |    58 | Expression types, 17 AST constructors |
-| lib/lexer.ml       |   245 | sedlex tokenizer with token spans     |
-| lib/parser.ml      |   379 | Pratt parser with attached postfix syntax |
-| lib/interpreter.ml |   304 | Eval AST against JSON values          |
-| lib/stdlib_fns.ml  |   387 | 30+ built-in fns, transducer dispatch |
-| lib/value.ml       |   100 | Runtime values (JSON + Seq + Xd)      |
-| lib/transducer.ml  |    98 | Composable transducer primitives      |
-| lib/error.ml       |    57 | Structured errors with locations      |
-| lib/printer.ml     |   153 | Direct JSON printer (no Yojson)       |
-| bin/main.ml        |    86 | CLI with cmdliner, JX_PROFILE support |
-| test/test_jx.ml    |   357 | 52 test cases                         |
-| bench/run.sh       |   ~180 | Hyperfine benchmark (jx vs jq vs qj) |
-| bench/bench_lazy.ml |  162 | Lazy/transducer memory benchmark     |
-| BENCHMARKS.org     |   137 | Benchmark results and analysis        |
-| PLAN.org           |   259 | Project plan with phases              |
+| File                  | Lines | Purpose                                 |
+|-----------------------+-------+-----------------------------------------|
+| lib/ast.ml            |    58 | AST and literals                        |
+| lib/lexer.ml          |   253 | sedlex tokenizer with bigint literals   |
+| lib/parser.ml         |   382 | Pratt parser                            |
+| lib/value.ml          |    79 | Runtime values, including =BigInt=      |
+| lib/interpreter.ml    |   337 | Eval AST against runtime values         |
+| lib/stdlib_fns.ml     |   426 | Built-ins and transducer dispatch       |
+| lib/transducer.ml     |    97 | Composable transducer primitives        |
+| lib/printer.ml        |   158 | Direct JSON printer                     |
+| lib/simdjson_native.ml|    29 | OCaml externals for native parser       |
+| lib/simdjson_stream.ml|    20 | Lazy sequence bridge for top arrays     |
+| lib/simdjson_stubs.cpp|   457 | simdjson binding + native =Value.t= build |
+| bin/main.ml           |   115 | CLI entrypoint and profiling            |
+| test/test_jx.ml       |   589 | End-to-end regression suite             |
+| bench/bench_lazy.ml   |   158 | Lazy/transducer benchmark               |
 
-* Performance Architecture
+* Runtime Model
 
-** Transducer Pipeline (Clojure-style)
-
-Collection ops (where, map, take, skip, unique, flatten) compose into a single
-=Xd= descriptor — a chain of step functions. Execution is deferred until the
-result is realized (printed, aggregated, or sorted).
-
+** Values
 #+begin_src ocaml
-(* Value.t carries the transducer descriptor *)
-type t = ... | Xd of t * xd
-
-(* Composing two transducers *)
-let compose a b : xd =
-  { xd_init = (fun next -> a.xd_init (b.xd_init next)) }
+type t =
+  | Null
+  | Bool of bool
+  | Int of int
+  | Float of float
+  | String of string
+  | Array of t list
+  | Object of (string * t) list
+  | Seq of t Seq.t
+  | Xd of t * xd
+  | BigInt of Z.t
 #+end_src
 
-Pipeline: =where pred | map f | take n= builds one =Xd= with three
-composed steps. When realized, it makes a single pass over the source data.
-No intermediate collections are allocated.
+The important change here is =BigInt of Z.t=. Large integer literals are
+preserved exactly instead of degrading to float.
 
-Aggregation (sum, avg, count) uses =Transducer.fold= for fused reduction —
-the transducer feeds directly into the fold accumulator.
+** Numeric Semantics
 
-** Direct JSON Printer
+- exact integer arithmetic for =Int= / =BigInt= combinations on:
+  - =+=
+  - =-=
+  - =*=
+  - =%=
+  - =/=
+- mixed integral/float arithmetic promotes to =Float=
+- huge integer literals stay exact
+- huge integer equality/ordering stays exact
 
-Writes JSON from =Value.t= directly to =Buffer.t=, skipping =Value.to_yojson=
-and =Yojson.Basic.pretty_to_string=. Supports compact and pretty modes with
-automatic compact/expanded formatting based on estimated width (80 char threshold).
+This is strictly better than the previous jx behavior and better than jq on
+large integer arithmetic.
 
-This was the single biggest performance win — output at 100K went from 1098ms
-to 369ms.
+** Transducer Pipeline
 
-** Profiling (=JX_PROFILE=1=)
+Collection ops (=where=, =map=, =take=, =skip=, =unique=, =flatten=) compose
+into a single transducer descriptor (=Xd=). Execution is deferred until the
+result is realized.
 
-Set =JX_PROFILE=1= to see per-stage timing on stderr:
+Aggregation (=sum=, =avg=, =count=) folds directly over the sequence/transducer
+without materializing an intermediate array.
 
-#+begin_src bash
-JX_PROFILE=1 jx '.' large.json > /dev/null
-#   read file                    1.4 ms
-#   yojson parse                31.5 ms
-#   of_yojson convert            9.3 ms
-#   parse query                  0.0 ms
-#   eval pipeline                0.0 ms
-#   output                      44.4 ms
-#   print                        0.1 ms
-#+end_src
+* Performance Snapshot
 
-** Performance Profile (100K records)
+Numbers below are from the current =main= tree on 2026-03-09, comparing jq
+1.8.1 with the native simdjson jx path.
 
-| Stage            | Time  | % total | Notes                    |
-|------------------+-------+---------+--------------------------|
-| read file        | 11ms  | 1%      | I/O bound                |
-| *yojson parse*   | 284ms | 35%     | Yojson.Basic.from_string |
-| *of_yojson*      | 96ms  | 12%     | Tree walk to rename ctors |
-| parse query      | 0ms   | 0%      |                          |
-| eval pipeline    | 0-609ms | varies | 0 for identity, 609 for sort_by |
-| *output (direct)* | 0-369ms | varies | 0 for scalar, 369 for identity |
-| print            | 1ms   | 0%      |                          |
+** xlarge.json (100K items)
 
-Remaining bottleneck: yojson parse + of_yojson = *380ms input floor*.
+| Query                          | jq       | jx       | Result                         |
+|--------------------------------+----------+----------+--------------------------------|
+| =where .price > 400 | take 5=  | ~234.2ms | ~19.1ms  | jx ~12.3x faster               |
+| =count=                        | ~233.3ms | ~70.3ms  | jx ~3.3x faster                |
+| =map .price | sum=             | ~315.1ms | ~82.8ms  | jx ~3.8x faster                |
+| =.=                            | ~490.5ms | ~493.9ms | near parity, jq still ~1% ahead |
 
-** Optimization History
+** Interpretation
 
-| Change               | Identity 100K (jx/jq) | Date       |
-|----------------------+------------------------+------------|
-| Seq-based lazy       | 3.10x                 | 2026-03-09 |
-| Transducer pipelines | 3.25x                 | 2026-03-09 |
-| Direct printer       | *1.51x*               | 2026-03-09 |
-
-** Next Optimizations (Planned)
-
-1. *Direct parser* (JSON → Value.t, skip Yojson.Basic.t)
-   - Saves ~96ms of_yojson conversion (12% of total)
-   - ~150 lines recursive descent, low risk
-   - Expected improvement: ~1.35x vs jq
-
-2. *Streaming top-level array parser*
-   - Parse one array element at a time, feed into transducer
-   - =take 5= on 100K would parse ~5 elements instead of 100K
-   - Would make pipeline ops O(output) on parse side — likely beat jq
-   - Architecturally compatible: transducers consume =t Seq.t=
-
-3. *(Speculative) Compact value representation*
-   - NaN-boxing or arena allocation
-   - Big effort, big payoff, big risk. Not yet justified.
-
-** query-json Findings
-
-query-json (=~/repos/query-json/=) forked Yojson into "jotason":
-- Disabled lexer position tracking for ~31% parse speedup
-- Three-tier integers (int → int64 → Big_int via zarith)
-- JSON comment support
-
-Despite these optimizations, query-json 0.6.1 is *slower than jq* at scale
-(contrary to their published benchmarks from v0.5.52). jx is 1.5-2x faster
-than query-json on most operations at 100K.
-
-* Language Features (Implemented)
-
-** Field Access
-#+begin_src bash
-jx '.name'                        # top-level field
-jx '.user.address.city'           # nested
-jx '.[0]'                         # array index
-jx '.[1:3]'                       # slice
-jx '.[-1]'                        # negative index
-jx '.name?'                       # optional (null if missing)
-jx '.name'                        # strict (error if missing)
-#+end_src
-
-** Pipes
-#+begin_src bash
-jx '.items | where .price > 100 | map .name'
-jx '.name | lower | truncate 20'
-#+end_src
-
-** Object Construction with Punning
-#+begin_src bash
-jx '{name, price}'                # => {name: .name, price: .price}
-jx '{name, total: .price * .qty}' # mixed
-#+end_src
-
-Punning checks env first (for let-bound variables), then falls back to
-field access on input.
-
-** String Interpolation
-#+begin_src bash
-jx '"hello ${.name}, age ${.age}"'
-jx '"total: ${.price * .qty}"'
-jx '"literal dollar: \$${.price}"'   # escaped $
-#+end_src
-
-Implementation: lexer detects =${= inside strings, collects expression source
-until balanced =}= (tracking brace depth), emits =INTERP_STRING= token with
-parts. Parser creates sub-parser for each expression part. Interpreter
-concatenates results via =value_to_string=.
-
-** Operators
-#+begin_src
-+  -  *  /  %          # arithmetic
-== != < > <= >=        # comparison
-&& ||                  # logical
-!                      # negation
-++                     # string concat
-??                     # null coalesce
-#+end_src
-
-** Control Flow
-#+begin_src bash
-jx 'if .price > 100 then "expensive" else "cheap"'
-jx 'let total = .price * .qty in {name, total}'
-jx 'map (x => {name: x.name})'    # lambda
-#+end_src
-
-** Implicit Iteration
-When input is an array, collection functions iterate implicitly:
-#+begin_src bash
-echo '[1,2,3,4,5]' | jx 'where . > 3'   # [4, 5]
-# No need for: .[] | select(. > 3) | [.]
-#+end_src
-
-* Stdlib (30 functions implemented)
-
-** Collection (transducible)
-| Function  | Args   | Description                              |
-|-----------+--------+------------------------------------------|
-| =where=  | expr   | Filter by predicate (composes transducer) |
-| =map=    | expr   | Transform each element                   |
-| =unique= | /none/ | Deduplicate, preserves insertion order    |
-| =flatten= | /none/ | Flatten one level of nesting             |
-| =take=   | n      | First n (composes transducer, early exit) |
-| =skip=   | n      | Skip n                                   |
-
-** Collection (eager — must realize)
-| Function   | Args | Description                         |
-|------------+------+-------------------------------------|
-| =sort_by=  | expr | Sort by expression result           |
-| =group_by= | expr | Group into object (not nested arrays)|
-| =reverse=  | /none/ | Reverse array                     |
-
-** Slicing
-| Function | Args   | Description   |
-|----------+--------+---------------|
-| =first=  | /none/ | First element (uses take 1 on Xd) |
-| =last=   | /none/ | Last element  |
-| =count=  | /none/ | Length (fused fold on Xd) |
-| =length= | /none/ | Alias for count |
-
-** Aggregation (fused fold — no materialization)
-| Function | Description              |
-|----------+--------------------------|
-| =sum=    | Sum numbers              |
-| =min=    | Minimum                  |
-| =max=    | Maximum                  |
-| =avg=    | Average (returns float)  |
-
-** String
-| Function   | Args   | Description                      |
-|------------+--------+----------------------------------|
-| =lower=    | /none/ | Lowercase (ascii)                |
-| =upper=    | /none/ | Uppercase (ascii)                |
-| =trim=     | /none/ | Strip whitespace                 |
-| =truncate= | n     | Safe truncate to n chars         |
-| =split=    | sep    | Split string (*single char only*) |
-| =join=     | sep    | Join array with separator        |
-
-** Object
-| Function | Args   | Description            |
-|----------+--------+------------------------|
-| =keys=   | /none/ | Keys (insertion order)  |
-| =values= | /none/ | Values                 |
-| =pick=   | fields | Select specific keys   |
-| =omit=   | fields | Remove specific keys   |
-
-** Type
-| Function    | Description              |
-|-------------+--------------------------|
-| =type=      | Returns type name string |
-| =to_string= | Convert to string       |
-| =to_number= | Parse string to number  |
-
-** Generator
-| Function | Args      | Description                     |
-|----------+-----------+---------------------------------|
-| =range=  | 0 args    | Infinite sequence (0, 1, 2...) |
-| =range=  | 1 arg (n) | [0..n)                         |
-| =range=  | 2 args    | [start..end)                   |
+- Top-level array streaming is a major win for early-exit and single-pass
+  reductions.
+- Identity is no longer catastrophically slower than jq, but not yet better.
+- The remaining work is no longer "replace Yojson"; that is done.
 
 * Parser Details
 
 ** Pratt Parser
+
 Expressions are parsed with a Pratt parser. Prefix parsing handles literals,
 unary operators, arrays/objects, =if=, =let=, lambdas, and root dot access.
-An infix binding-power table handles precedence and associativity for pipes and
-binary operators in one place, which removed most of the old recursive-descent
-boilerplate and fixed left-associativity bugs in =-=, =/=, =%=, and =++=.
+An infix binding-power table handles precedence and associativity in one place.
 
-** Precedence (low to high)
-1. pipe (=|=)
-2. or (=||=)
-3. and (=&&=)
-4. equality (===, =!==)
-5. comparison (=<=, =>=, =<==, =>==)
-6. null coalesce (=??=)
-7. concat (=++=)
-8. additive (=+=, =-=)
-9. multiplicative (=*=, =/=, =%=)
-10. unary (=!=, unary =-=)
-11. postfix (=.field=, =[index]=, =?=)
-12. primary (literals, identifiers, parens)
-
-** Function Call Parsing
-Bare identifiers are parsed as function calls. Arguments are collected until
-a terminator token (=|=, =,=, =)=, =]=, =}=, =;=, =EOF=, =then=, =else=, =in=).
+** Function Arguments and Postfix Binding
 
 Whitespace separates implicit function arguments:
-=pick .name .email=. Semicolons are also accepted as explicit separators:
-=pick .name; .email=.
+=pick .name .email=
 
-Postfix operators bind only when attached to the preceding expression:
-- =.items[0].name= is a single chained expression
-- =.items [0]= is =.items= followed by a separate =[0]= expression
+Postfix operators only bind when attached to the expression they extend:
+- =.items[0].name= chains
+- =.items [0]= does not
 - =.name?= works, =.name ?= does not
 
-If ==>= follows an identifier, it's parsed as a lambda: =x => x.name=
+* JSON Correctness Coverage
 
-** String Interpolation Parsing
-=INTERP_STRING= tokens contain =Lit= and =Expr= parts. The parser creates a
-sub-parser for each =Expr= part's source string by calling =parse= recursively.
-This means full expression syntax works inside =${...}=.
+The test suite now includes:
+- huge signed/unsigned integers
+- huge negative integers
+- exact bigint arithmetic
+- Unicode strings
+- escaped keys
+- surrogate-pair input
+- malformed JSON
+- deep nested arrays/objects
+- streamed path coverage for supported top-array ops
 
-* Interpreter Details
+* Known Limitations
 
-** Value Types
-#+begin_src ocaml
-type t =
-  | Null | Bool of bool
-  | Int of int | Float of float
-  | String of string
-  | Array of t list
-  | Object of (string * t) list    (* preserves insertion order *)
-  | Seq of t Seq.t                 (* lazy, internal only *)
-  | Xd of t * xd                   (* transducer descriptor *)
-#+end_src
-
-** Truthiness
-Falsy: =null=, =false=, =0=, =0.0=, =""=, =[]=. Everything else is truthy.
-
-** Null Handling
-Strict by default. =.missing= on an object raises =Key_not_found= with
-available keys listed and Levenshtein-based "did you mean?" suggestion.
-=.missing?= returns =null=.
-
-** Arithmetic
-Mixed int/float promotes to float. Division by zero raises error (not infinity).
-
-** Object Punning with Env
-={name, total}= checks let-bound env first, then field access. This means
-=let x = 1 in {x}= produces ={x: 1}= not ={x: .x}=.
-
-* Error System
-
-** Error Kinds
-=parse_error=, =key_not_found=, =index_out_of_bounds=, =type_mismatch=,
-=null_access=, =unknown_function=, =arity_mismatch=, =runtime_error=
-
-** Error Display Format
-#+begin_src
-error[key_not_found]: key "nme" not found
-  |
-  | .nme
-  |  ^^^
-  = help: did you mean .name?
-#+end_src
-
-** Suggestion Engine
-Levenshtein distance <= 3 triggers "did you mean?" for both field names and
-function names. If no close match, lists all available options.
-
-* Known Limitations & Cuts
-
-** Parser
-- =split= only works on single-character separators (=String.split_on_char=)
-- Negative number literals parse as unary minus (works for math, fails in =take -1=)
-- No multiline comments
-- Function calls are still bare-identifier based; no parenthesized/comma call syntax yet
-
-** Interpreter
-- =dispatch_ref= mutable is a hack for cyclic dependency
-- Cross-type =value_compare= falls back to comparing type name strings
-- No tail-call optimization for deep pipelines
-
-** Stdlib Gaps
-Not implemented (mentioned in plan):
-- =replace=, =starts_with=, =ends_with=, =contains=
-- =flatten= with depth control
-- =find= (first match), =some= (any match?), =partition=
-
-** Error Messages
-- Parse errors now use token spans, but interpolation subexpressions still
-  report positions relative to the nested snippet
-- Unknown function with Levenshtein > 3 dumps all function names (noisy)
-
-** CLI
-- Reads entire stdin into memory (no streaming)
-- No =--null-input= / =-n= flag
-- No =--slurp= for JSONL input
-- No inline JSON as second positional arg
-
-** Tests
-- 52 tests (41 core/collections/strings/null + 11 lazy sequence tests)
-- Lazy tests include a proof-of-laziness test (skips 1M elements, would hang if eager)
-- No error case tests beyond strict null
-- No edge cases: empty arrays, unicode, large numbers, deeply nested objects
-- No property-based testing or fuzzing
-
-** Architecture
-- No =.mli= interface files — everything is public
-- No barrel module for clean API export
+- Arrays and objects are still list-backed in the runtime
+- Top-level array streaming is query-shape dependent, not universal
+- Identity still slightly trails jq
+- Build currently assumes a system simdjson installation
+- =split= still only supports single-character separators
+- No parenthesized/comma call syntax yet
 
 * Dependencies
 
-| Package     | Version | Purpose                       |
-|-------------+---------+-------------------------------|
-| ocaml       | >= 5.4  | Language                      |
-| dune        | >= 3.17 | Build system                  |
-| cmdliner    | >= 1.3  | CLI argument parsing          |
-| sedlex      |         | Unicode-aware lexer           |
-| yojson      | >= 2.0  | JSON parsing (output removed) |
-| unix        |         | Profiling timer               |
-| alcotest    |         | Test framework (test only)    |
-| ocamlformat | 0.27.0  | Code formatting (dev only)    |
+| Package   | Purpose                                |
+|-----------+----------------------------------------|
+| sedlex    | query lexer                            |
+| zarith    | exact big integers                     |
+| cmdliner  | CLI                                    |
+| unix      | profiling timer                        |
+| simdjson  | system C++ dependency, JSON input path |
 
 * Build & Run
 
 #+begin_src bash
-# Setup (first time)
-cd ~/dev/sandbox/jx
-opam switch create . 5.4.0 --yes
-opam install cmdliner sedlex yojson alcotest -y
+# install OCaml deps
+opam install . --deps-only --with-test -y
 
-# Build
-eval $(opam env) && dune build @all
+# build
+make build
 
-# Test
-dune build @runtest
+# tests
+make test
 
-# Run
+# run
 echo '{"name":"Alice"}' | dune exec bin/main.exe -- '.name'
 
-# Profile
-JX_PROFILE=1 ./_build/default/bin/main.exe '.' bench/data/large.json > /dev/null
-
-# Benchmark
-bash bench/run.sh    # requires hyperfine
+# profile
+JX_PROFILE=1 ./_build/default/bin/main.exe 'count' bench/data/xlarge.json > /dev/null
 #+end_src
 
-* Comparison with jq
+* Merge Notes
 
-#+begin_src bash
-# Filter + pick fields
-jq  '.items[] | select(.price > 100) | {name, price}'
-jx  'where .price > 100 | map {name, price}'
-
-# String manipulation
-jq  '.name | ascii_downcase | ltrimstr("mr. ")'
-jx  '.name | lower | trim_start "mr. "'
-
-# Group by (jq returns nested arrays, jx returns object)
-jq  'group_by(.type) | map({type: .[0].type, items: .})'
-jx  'group_by .type'
-
-# String interpolation
-jq  '"hello \(.name), age \(.age)"'
-jx  '"hello ${.name}, age ${.age}"'
-
-# Null handling
-jq  '.missing'          # null (silent)
-jx  '.missing'          # error[key_not_found] with suggestion
-jx  '.missing?'         # null (explicit opt-in)
-
-# Keys (jq sorts, jx preserves order)
-jq  'keys'              # ["a", "b"] (sorted)
-jx  'keys'              # ["b", "a"] (insertion order)
-#+end_src
-
-* Prior Art Reference
-
-| Tool       | Language | Approach                         | Syntax Change? |
-|------------+----------+----------------------------------+----------------|
-| jq         | C        | The original                     | —              |
-| query-json | OCaml    | Better names, strict nulls, REPL | Minimal        |
-| jaq        | Rust     | Fastest clone, multi-format I/O  | No             |
-| gojq       | Go       | Arbitrary precision, embeddable  | No             |
-| fq         | Go       | Binary formats (150+)            | No             |
-| *jx*       | OCaml    | *New query language*              | *Yes*          |
-
-query-json source at =~/repos/query-json/= — used as reference for:
-- Parser structure (recursive descent with sedlex)
-- Error formatting approach (caret pointers)
-- Interpreter patterns (eval function dispatch)
-- Stdlib function naming conventions
-- Forked Yojson ("jotason") — lexer position tracking disabled for 31% speedup
+The simdjson path is no longer experimental in code. The old branch-local audit
+and spike notes remain in =SIMDJSON_CLAIM_AUDIT.org= and
+=SIMDJSON_IMPLEMENTATION.org= as provenance for how the change was validated.
