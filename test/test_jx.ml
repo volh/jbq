@@ -845,6 +845,16 @@ let test_schema_map_nullable_values_in_array () =
     {|{"type":"array","items":{"type":"object","additionalProperties":{"type":["string","null"],"enum":["x","y",null]}}}|}
     (schema_str {|[{"a":"x"},{"b":null},{"c":"y"}]|})
 
+let test_schema_oneof_base_subsumes_enum () =
+  let json = Printf.sprintf {|[%s]|}
+    (String.concat ","
+      (List.init 25 (fun i -> Printf.sprintf {|{"code":"s%d"}|} i)
+       @ [ {|{"code":42}|}; {|{"code":"specific"}|} ]))
+  in
+  let result = schema_str json in
+  let has_string_enum = contains_substring result {|"string","enum"|} in
+  Alcotest.(check bool) "no string enum when bare string exists" false has_string_enum
+
 let () =
   Alcotest.run "jx"
     [
@@ -1020,5 +1030,6 @@ let () =
           Alcotest.test_case "enum collapse in values" `Quick test_schema_map_enum_collapse_in_values;
           Alcotest.test_case "nested map in map" `Quick test_schema_map_nested_map_in_map;
           Alcotest.test_case "nullable values in array" `Quick test_schema_map_nullable_values_in_array;
+          Alcotest.test_case "oneof base subsumes enum" `Quick test_schema_oneof_base_subsumes_enum;
         ] );
     ]

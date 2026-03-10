@@ -24,6 +24,10 @@ let base_type = function
 
 let is_numeric s = match base_type s with SInteger | SNumber -> true | _ -> false
 
+let is_simple_type = function
+  | SNull | SBoolean | SInteger | SNumber | SString -> true
+  | _ -> false
+
 let value_mem v vs =
   List.exists
     (fun v2 ->
@@ -119,6 +123,19 @@ and merge_into_list xs s =
     if List.exists (fun x -> x = s) xs then xs
     else if is_numeric s && List.exists is_numeric xs then
       List.map (fun x -> if is_numeric x then SNumber else x) xs
+    else if is_simple_type s
+            && List.exists
+                 (fun x ->
+                   match x with SEnum (t, _) when t = s -> true | _ -> false)
+                 xs
+    then
+      List.map
+        (fun x -> match x with SEnum (t, _) when t = s -> s | _ -> x)
+        xs
+    else if (match s with
+            | SEnum (t, _) when is_simple_type t -> List.mem t xs
+            | _ -> false)
+    then xs
     else
       let try_merge_compatible () =
         match s_base with
@@ -176,7 +193,14 @@ and merge_into_list xs s =
         | Some result -> result
         | None -> xs @ [ s ]))
 
-and normalize_oneof = function
+and normalize_oneof xs =
+  let dominated x =
+    match x with
+    | SEnum (t, _) when is_simple_type t ->
+      List.exists (fun y -> y = t) xs
+    | _ -> false
+  in
+  match List.filter (fun x -> not (dominated x)) xs with
   | [] -> SEmpty
   | [ single ] -> single
   | xs -> SOneOf xs
@@ -255,9 +279,31 @@ let infer_sampled ~n (v : Value.t) : schema =
       infer_seq (List.to_seq items |> Seq.take n)
     | _ -> infer v
 
-let is_simple_type = function
-  | SNull | SBoolean | SInteger | SNumber | SString -> true
-  | _ -> false
+let rec strip_const = function
+  | SEnum (ty, [ _ ]) -> strip_const ty
+  | SArray s -> SArray (strip_const s)
+  | SObject obj ->
+    SObject
+      {
+        obj with
+        properties =
+          List.map (fun (k, s) -> (k, strip_const s)) obj.properties;
+      }
+  | SOneOf xs -> SOneOf (List.map strip_const xs)
+  | s -> s
+
+let rec strip_enum = function
+  | SEnum (ty, _) -> strip_enum ty
+  | SArray s -> SArray (strip_enum s)
+  | SObject obj ->
+    SObject
+      {
+        obj with
+        properties =
+          List.map (fun (k, s) -> (k, strip_enum s)) obj.properties;
+      }
+  | SOneOf xs -> SOneOf (List.map strip_enum xs)
+  | s -> s
 
 let rec to_value (s : schema) : Value.t =
   match s with
@@ -356,6 +402,120 @@ and to_value_oneof schemas =
       [ ("oneOf", Value.Array (List.map to_value schemas)) ]
 
 and type_obj name = Value.Object [ ("type", Value.String name) ]
+
+let rec normalize_value ?(sort_array = false) = function
+  | Value.Object kvs ->
+    let sorted = List.sort (fun (a, _) (b, _) -> String.compare a b) kvs in
+    Value.Object
+      (List.map
+         (fun (k, v) ->
+           (k, normalize_value ~sort_array:(k = "required") v))
+         sorted)
+  | Value.Array items ->
+    let items = List.map (normalize_value ~sort_array:false) items in
+    if sort_array then
+      Value.Array
+        (List.sort
+           (fun a b ->
+             String.compare
+               (Printer.to_json ~compact:true a)
+               (Printer.to_json ~compact:true b))
+           items)
+    else Value.Array items
+  | v -> v
+
+let dedup (root : Value.t) : Value.t =
+  let tbl = Hashtbl.create 64 in
+  let min_size = 50 in
+  let canonical v = Printer.to_json ~compact:true (normalize_value v) in
+  let rec collect parent_key v =
+    match v with
+    | Value.Object kvs -> (
+      let has_props =
+        List.exists (fun (k, _) -> k = "properties") kvs
+      in
+      if has_props then (
+        let ser = canonical v in
+        if String.length ser >= min_size then (
+          let entry =
+            match Hashtbl.find_opt tbl ser with
+            | Some (name, count) -> (name, count + 1)
+            | None -> (parent_key, 1)
+          in
+          Hashtbl.replace tbl ser entry));
+      List.iter (fun (k, child) -> collect k child) kvs)
+    | Value.Array items -> List.iter (collect parent_key) items
+    | _ -> ()
+  in
+  collect "Root" root;
+  let defs = Hashtbl.create 16 in
+  let names_used = Hashtbl.create 16 in
+  let ref_map = Hashtbl.create 16 in
+  Hashtbl.iter
+    (fun ser (name, count) ->
+      if count >= 2 then (
+        let base =
+          String.capitalize_ascii
+            (if String.length name > 0 then name else "Schema")
+        in
+        let final_name =
+          if Hashtbl.mem names_used base then (
+            let i = ref 2 in
+            while Hashtbl.mem names_used (base ^ string_of_int !i) do
+              incr i
+            done;
+            base ^ string_of_int !i)
+          else base
+        in
+        Hashtbl.replace names_used final_name ();
+        Hashtbl.replace ref_map ser final_name;
+        Hashtbl.replace defs final_name ser))
+    tbl;
+  if Hashtbl.length defs = 0 then root
+  else
+    let rec rewrite v =
+      match v with
+      | Value.Object kvs -> (
+        let has_props =
+          List.exists (fun (k, _) -> k = "properties") kvs
+        in
+        if has_props then
+          let ser = canonical v in
+          match Hashtbl.find_opt ref_map ser with
+          | Some name ->
+            Value.Object
+              [ ("$ref", Value.String ("#/$defs/" ^ name)) ]
+          | None ->
+            Value.Object
+              (List.map (fun (k, child) -> (k, rewrite child)) kvs)
+        else
+          Value.Object
+            (List.map (fun (k, child) -> (k, rewrite child)) kvs))
+      | Value.Array items ->
+        Value.Array (List.map rewrite items)
+      | _ -> v
+    in
+    let rewritten = rewrite root in
+    let rewrite_children = function
+      | Value.Object kvs ->
+        Value.Object
+          (List.map (fun (k, child) -> (k, rewrite child)) kvs)
+      | v -> v
+    in
+    let defs_value =
+      Value.Object
+        (Hashtbl.fold
+           (fun name ser acc ->
+             let parsed =
+               Simdjson_native.parse_value ser
+             in
+             (name, rewrite_children parsed) :: acc)
+           defs [])
+    in
+    match rewritten with
+    | Value.Object kvs ->
+      Value.Object (("$defs", defs_value) :: kvs)
+    | _ -> rewritten
 
 let add_schema_id (v : Value.t) : Value.t =
   match v with
