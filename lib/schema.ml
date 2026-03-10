@@ -181,6 +181,31 @@ and normalize_oneof = function
   | [ single ] -> single
   | xs -> SOneOf xs
 
+let all_keys_numeric keys =
+  keys <> []
+  && List.for_all
+       (fun k ->
+         String.length k > 0
+         &&
+         let rec loop i =
+           if i >= String.length k then true
+           else k.[i] >= '0' && k.[i] <= '9' && loop (i + 1)
+         in
+         loop 0)
+       keys
+
+let merge_all = function
+  | [] -> SEmpty
+  | first :: rest -> List.fold_left merge first rest
+
+let try_as_map obj =
+  let keys = List.map fst obj.properties in
+  let values = List.map snd obj.properties in
+  let n = List.length keys in
+  if n = 0 then None
+  else if all_keys_numeric keys then Some (merge_all values)
+  else None
+
 let rec infer (v : Value.t) : schema =
   match v with
   | Null -> SNull
@@ -249,25 +274,33 @@ let rec to_value (s : schema) : Value.t =
   | SArray items ->
     Value.Object
       [ ("type", Value.String "array"); ("items", to_value items) ]
-  | SObject obj ->
-    let props =
+  | SObject obj -> (
+    match try_as_map obj with
+    | Some value_schema ->
       Value.Object
-        (List.map (fun (k, s) -> (k, to_value s)) obj.properties)
-    in
-    let fields =
-      [ ("type", Value.String "object"); ("properties", props) ]
-    in
-    let fields =
-      if obj.required <> [] then
-        fields
-        @ [
-            ( "required",
-              Value.Array
-                (List.map (fun k -> Value.String k) obj.required) );
-          ]
-      else fields
-    in
-    Value.Object fields
+        [
+          ("type", Value.String "object");
+          ("additionalProperties", to_value value_schema);
+        ]
+    | None ->
+      let props =
+        Value.Object
+          (List.map (fun (k, s) -> (k, to_value s)) obj.properties)
+      in
+      let fields =
+        [ ("type", Value.String "object"); ("properties", props) ]
+      in
+      let fields =
+        if obj.required <> [] then
+          fields
+          @ [
+              ( "required",
+                Value.Array
+                  (List.map (fun k -> Value.String k) obj.required) );
+            ]
+        else fields
+      in
+      Value.Object fields)
   | SOneOf schemas -> to_value_oneof schemas
 
 and nullable_simple s =

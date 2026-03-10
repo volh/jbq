@@ -692,6 +692,57 @@ let test_schema_nullable_shorthand () =
     {|{"type":"array","items":{"type":"object","properties":{"v":{"type":["string","null"]}},"required":["v"]}}|}
     (schema_str json)
 
+let test_schema_map_numeric_keys () =
+  Alcotest.(check string) "numeric keys detected as map"
+    {|{"type":"object","additionalProperties":{"type":"string","enum":["a","b","c"]}}|}
+    (schema_str {|{"0":"a","1":"b","2":"c"}|})
+
+let test_schema_map_numeric_single_key () =
+  Alcotest.(check string) "single numeric key is map"
+    {|{"type":"object","additionalProperties":{"const":"value"}}|}
+    (schema_str {|{"0":"value"}|})
+
+let test_schema_map_numeric_mixed_values () =
+  Alcotest.(check string) "numeric keys with mixed value types"
+    {|{"type":"object","additionalProperties":{"oneOf":[{"type":"integer"},{"type":"string"}]}}|}
+    (schema_str {|{"0":1,"1":"hello"}|})
+
+let test_schema_map_numeric_nullable_values () =
+  Alcotest.(check string) "numeric keys with nullable values"
+    {|{"type":"object","additionalProperties":{"type":["string","null"],"enum":["hello","world",null]}}|}
+    (schema_str {|{"0":"hello","1":null,"2":"world"}|})
+
+let test_schema_map_numeric_object_values () =
+  Alcotest.(check string) "numeric keys with object values"
+    {|{"type":"object","additionalProperties":{"type":"object","properties":{"name":{"type":"string","enum":["A","B"]}},"required":["name"]}}|}
+    (schema_str {|{"0":{"name":"A"},"1":{"name":"B"}}|})
+
+let test_schema_map_numeric_non_contiguous () =
+  Alcotest.(check string) "non-contiguous numeric keys"
+    {|{"type":"object","additionalProperties":{"type":"string","enum":["a","b","c"]}}|}
+    (schema_str {|{"42":"a","100":"b","7":"c"}|})
+
+let test_schema_map_not_all_numeric () =
+  Alcotest.(check string) "mixed numeric/non-numeric stays record"
+    {|{"type":"object","properties":{"0":{"const":"a"},"1":{"const":"b"},"name":{"const":"c"}},"required":["0","1","name"]}|}
+    (schema_str {|{"0":"a","1":"b","name":"c"}|})
+
+let test_schema_map_array_of_maps () =
+  Alcotest.(check string) "array of map objects"
+    {|{"type":"array","items":{"type":"object","additionalProperties":{"type":"string","enum":["a","c","b","d"]}}}|}
+    (schema_str {|[{"0":"a","1":"b"},{"0":"c","2":"d"}]|})
+
+let test_schema_map_nested_in_record () =
+  Alcotest.(check string) "map nested inside record"
+    {|{"type":"object","properties":{"name":{"const":"test"},"data":{"type":"object","additionalProperties":{"type":"string","enum":["a","b","c"]}}},"required":["name","data"]}|}
+    (schema_str {|{"name":"test","data":{"0":"a","1":"b","2":"c"}}|})
+
+let test_schema_map_with_query () =
+  Alcotest.(check string) "map detected after query"
+    {|{"type":"object","additionalProperties":{"type":"string","enum":["a","b","c"]}}|}
+    (schema_query_str ".data"
+       {|{"data":{"0":"a","1":"b","2":"c"}}|})
+
 let () =
   Alcotest.run "jx"
     [
@@ -839,5 +890,18 @@ let () =
           Alcotest.test_case "nullable enum" `Quick test_schema_nullable_enum;
           Alcotest.test_case "enum threshold" `Quick test_schema_enum_threshold;
           Alcotest.test_case "nullable shorthand" `Quick test_schema_nullable_shorthand;
+        ] );
+      ( "schema-maps",
+        [
+          Alcotest.test_case "numeric keys" `Quick test_schema_map_numeric_keys;
+          Alcotest.test_case "numeric single key" `Quick test_schema_map_numeric_single_key;
+          Alcotest.test_case "numeric mixed values" `Quick test_schema_map_numeric_mixed_values;
+          Alcotest.test_case "numeric nullable values" `Quick test_schema_map_numeric_nullable_values;
+          Alcotest.test_case "numeric object values" `Quick test_schema_map_numeric_object_values;
+          Alcotest.test_case "numeric non-contiguous" `Quick test_schema_map_numeric_non_contiguous;
+          Alcotest.test_case "not all numeric" `Quick test_schema_map_not_all_numeric;
+          Alcotest.test_case "array of maps" `Quick test_schema_map_array_of_maps;
+          Alcotest.test_case "nested in record" `Quick test_schema_map_nested_in_record;
+          Alcotest.test_case "map with query" `Quick test_schema_map_with_query;
         ] );
     ]
