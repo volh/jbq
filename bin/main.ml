@@ -29,7 +29,18 @@ let rec supports_simdjson_top_array_path (expr : Jx.Ast.expr) =
     && supports_simdjson_top_array_path right
   | _ -> false
 
-let run query_str input_source raw_output compact schema sample =
+let run query_or_file input_source raw_output compact schema sample =
+  let query_str, input_source =
+    match (query_or_file, input_source, schema) with
+    | None, _, true -> (".", input_source)
+    | None, _, false ->
+      Printf.eprintf "error: QUERY argument is required\n";
+      exit 1
+    | Some q, None, true
+      when Sys.file_exists q && q.[0] <> '.' && not (String.contains q ' ') ->
+      (".", Some q)
+    | Some q, file, _ -> (q, file)
+  in
   try
     let ast = time "parse query" (fun () -> Jx.Parser.parse query_str) in
     let json_str =
@@ -106,8 +117,8 @@ let run query_str input_source raw_output compact schema sample =
 open Cmdliner
 
 let query =
-  let doc = "The jx query expression." in
-  Arg.(required & pos 0 (some string) None & info [] ~docv:"QUERY" ~doc)
+  let doc = "The jx query expression. Defaults to identity (.) when --schema is used." in
+  Arg.(value & pos 0 (some string) None & info [] ~docv:"QUERY" ~doc)
 
 let input_file =
   let doc = "Input JSON file. Reads from stdin if not provided." in
