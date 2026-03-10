@@ -548,6 +548,19 @@ let schema_sampled_str ~n json_str =
   let s = Jx.Schema.infer_sampled ~n input in
   Jx.Printer.to_json ~compact:true (Jx.Schema.to_value s)
 
+let contains_substring s sub =
+  let slen = String.length s and sublen = String.length sub in
+  if sublen > slen then false
+  else
+    let found = ref false in
+    for i = 0 to slen - sublen do
+      if (not !found) && String.sub s i sublen = sub then found := true
+    done;
+    !found
+
+let is_map_schema result =
+  contains_substring result "additionalProperties"
+
 let test_schema_null () =
   Alcotest.(check string) "null schema"
     {|{"type":"null"}|}
@@ -722,6 +735,34 @@ let test_schema_map_numeric_non_contiguous () =
     {|{"type":"object","additionalProperties":{"type":"string","enum":["a","b","c"]}}|}
     (schema_str {|{"42":"a","100":"b","7":"c"}|})
 
+let test_schema_map_dynamic_keys_uniform () =
+  Alcotest.(check string) "array-merged disjoint keys detected as map"
+    {|{"type":"array","items":{"type":"object","additionalProperties":{"type":"string","enum":["Hello","Bonjour","Hallo"]}}}|}
+    (schema_str {|[{"en":"Hello"},{"fr":"Bonjour"},{"de":"Hallo"}]|})
+
+let test_schema_map_shared_keys_stays_record () =
+  Alcotest.(check string) "array-merged with shared keys stays record"
+    {|{"type":"array","items":{"type":"object","properties":{"name":{"type":"string","enum":["A","B"]},"age":{"type":"integer","enum":[30,25]}},"required":["name","age"]}}|}
+    (schema_str {|[{"name":"A","age":30},{"name":"B","age":25}]|})
+
+let test_schema_map_dynamic_keys_nonuniform () =
+  Alcotest.(check bool) "disjoint keys with mixed types stays record"
+    false
+    (is_map_schema
+       (schema_str {|[{"a":1},{"b":"hello"},{"c":true}]|}))
+
+let test_schema_map_single_object_no_detect () =
+  Alcotest.(check bool) "single object with many string keys stays record"
+    false
+    (let items = List.init 25 (fun i -> Printf.sprintf {|"key_%d":"val_%d"|} i i) in
+     let json = "{" ^ String.concat "," items ^ "}" in
+     is_map_schema (schema_str json))
+
+let test_schema_map_partial_overlap_stays_record () =
+  Alcotest.(check string) "partial key overlap stays record"
+    {|{"type":"array","items":{"type":"object","properties":{"id":{"type":"integer","enum":[1,2]},"name":{"const":"A"},"email":{"const":"a@b"}},"required":["id"]}}|}
+    (schema_str {|[{"id":1,"name":"A"},{"id":2,"email":"a@b"}]|})
+
 let test_schema_map_not_all_numeric () =
   Alcotest.(check string) "mixed numeric/non-numeric stays record"
     {|{"type":"object","properties":{"0":{"const":"a"},"1":{"const":"b"},"name":{"const":"c"}},"required":["0","1","name"]}|}
@@ -742,6 +783,67 @@ let test_schema_map_with_query () =
     {|{"type":"object","additionalProperties":{"type":"string","enum":["a","b","c"]}}|}
     (schema_query_str ".data"
        {|{"data":{"0":"a","1":"b","2":"c"}}|})
+
+let test_schema_map_single_key_objects () =
+  Alcotest.(check string) "array of single-key objects as map"
+    {|{"type":"array","items":{"type":"object","additionalProperties":{"type":"object","properties":{"score":{"type":"integer","enum":[95,87]}},"required":["score"]}}}|}
+    (schema_str
+       {|[{"user_1":{"score":95}},{"user_2":{"score":87}}]|})
+
+let test_schema_map_boolean_flags () =
+  Alcotest.(check string) "boolean feature flags as map"
+    {|{"type":"array","items":{"type":"object","additionalProperties":{"type":"boolean"}}}|}
+    (schema_str
+       {|[{"feat_a":true},{"feat_b":false},{"feat_c":true}]|})
+
+let test_schema_map_one_shared_key_saves () =
+  Alcotest.(check string) "one shared key prevents map"
+    {|{"type":"array","items":{"type":"object","properties":{"id":{"type":"integer","enum":[1,2,3]},"a":{"const":"x"},"b":{"const":"y"},"c":{"const":"z"}},"required":["id"]}}|}
+    (schema_str
+       {|[{"id":1,"a":"x"},{"id":2,"b":"y"},{"id":3,"c":"z"}]|})
+
+let test_schema_map_identical_keys () =
+  Alcotest.(check string) "identical keys across objects stays record"
+    {|{"type":"array","items":{"type":"object","properties":{"a":{"type":"integer","enum":[1,3]},"b":{"type":"integer","enum":[2,4]}},"required":["a","b"]}}|}
+    (schema_str {|[{"a":1,"b":2},{"a":3,"b":4}]|})
+
+let test_schema_map_chain_overlap () =
+  Alcotest.(check string) "chain overlap stays record"
+    {|{"type":"array","items":{"type":"object","properties":{"a":{"const":1},"b":{"type":"integer","enum":[2,3]},"c":{"type":"integer","enum":[4,5]},"d":{"const":6}}}}|}
+    (schema_str
+       {|[{"a":1,"b":2},{"b":3,"c":4},{"c":5,"d":6}]|})
+
+let test_schema_map_empty_object_no_poison () =
+  Alcotest.(check string) "empty object does not trigger map"
+    {|{"type":"array","items":{"type":"object","properties":{"name":{"const":"A"},"city":{"const":"NYC"}}}}|}
+    (schema_str {|[{"name":"A","city":"NYC"},{}]|})
+
+let test_schema_map_two_different_records () =
+  Alcotest.(check string) "two different record types stays record"
+    {|{"type":"array","items":{"type":"object","properties":{"type":{"const":"user"},"name":{"const":"A"},"status":{"const":"ok"},"message":{"const":"done"}}}}|}
+    (schema_str
+       {|[{"type":"user","name":"A"},{"status":"ok","message":"done"}]|})
+
+let test_schema_map_enum_collapse_in_values () =
+  let items =
+    List.init 25 (fun i ->
+      Printf.sprintf {|{"%d":"val_%d"}|} i i)
+  in
+  let json = "[" ^ String.concat "," items ^ "]" in
+  Alcotest.(check string) "map values collapse past enum threshold"
+    {|{"type":"array","items":{"type":"object","additionalProperties":{"type":"string"}}}|}
+    (schema_str json)
+
+let test_schema_map_nested_map_in_map () =
+  Alcotest.(check string) "nested map detection"
+    {|{"type":"array","items":{"type":"object","additionalProperties":{"type":"object","additionalProperties":{"type":"integer","enum":[1,3,2,4]}}}}|}
+    (schema_str
+       {|[{"x":{"0":1,"1":2}},{"y":{"0":3,"1":4}}]|})
+
+let test_schema_map_nullable_values_in_array () =
+  Alcotest.(check string) "map with nullable values in array context"
+    {|{"type":"array","items":{"type":"object","additionalProperties":{"type":["string","null"],"enum":["x","y",null]}}}|}
+    (schema_str {|[{"a":"x"},{"b":null},{"c":"y"}]|})
 
 let () =
   Alcotest.run "jx"
@@ -899,9 +1001,24 @@ let () =
           Alcotest.test_case "numeric nullable values" `Quick test_schema_map_numeric_nullable_values;
           Alcotest.test_case "numeric object values" `Quick test_schema_map_numeric_object_values;
           Alcotest.test_case "numeric non-contiguous" `Quick test_schema_map_numeric_non_contiguous;
+          Alcotest.test_case "dynamic keys uniform" `Quick test_schema_map_dynamic_keys_uniform;
+          Alcotest.test_case "shared keys stays record" `Quick test_schema_map_shared_keys_stays_record;
+          Alcotest.test_case "dynamic keys nonuniform" `Quick test_schema_map_dynamic_keys_nonuniform;
+          Alcotest.test_case "single object no detect" `Quick test_schema_map_single_object_no_detect;
+          Alcotest.test_case "partial overlap stays record" `Quick test_schema_map_partial_overlap_stays_record;
           Alcotest.test_case "not all numeric" `Quick test_schema_map_not_all_numeric;
           Alcotest.test_case "array of maps" `Quick test_schema_map_array_of_maps;
           Alcotest.test_case "nested in record" `Quick test_schema_map_nested_in_record;
           Alcotest.test_case "map with query" `Quick test_schema_map_with_query;
+          Alcotest.test_case "single-key objects" `Quick test_schema_map_single_key_objects;
+          Alcotest.test_case "boolean flags" `Quick test_schema_map_boolean_flags;
+          Alcotest.test_case "one shared key saves" `Quick test_schema_map_one_shared_key_saves;
+          Alcotest.test_case "identical keys" `Quick test_schema_map_identical_keys;
+          Alcotest.test_case "chain overlap" `Quick test_schema_map_chain_overlap;
+          Alcotest.test_case "empty object no poison" `Quick test_schema_map_empty_object_no_poison;
+          Alcotest.test_case "two different records" `Quick test_schema_map_two_different_records;
+          Alcotest.test_case "enum collapse in values" `Quick test_schema_map_enum_collapse_in_values;
+          Alcotest.test_case "nested map in map" `Quick test_schema_map_nested_map_in_map;
+          Alcotest.test_case "nullable values in array" `Quick test_schema_map_nullable_values_in_array;
         ] );
     ]

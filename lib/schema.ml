@@ -198,12 +198,21 @@ let merge_all = function
   | [] -> SEmpty
   | first :: rest -> List.fold_left merge first rest
 
+let is_uniform_for_map = function
+  | SOneOf xs ->
+    let non_null = List.filter (fun s -> s <> SNull) xs in
+    List.length non_null <= 1
+  | _ -> true
+
 let try_as_map obj =
   let keys = List.map fst obj.properties in
   let values = List.map snd obj.properties in
   let n = List.length keys in
   if n = 0 then None
   else if all_keys_numeric keys then Some (merge_all values)
+  else if obj.count > 1 && obj.required = [] && n <= obj.count then
+    let merged = merge_all values in
+    if is_uniform_for_map merged then Some merged else None
   else None
 
 let rec infer (v : Value.t) : schema =
@@ -217,7 +226,7 @@ let rec infer (v : Value.t) : schema =
   | Object kvs ->
     let properties = List.map (fun (k, v) -> (k, infer v)) kvs in
     let required = List.map fst kvs in
-    SObject { properties; required; count = 1 }
+    SObject { properties; required; count = (if kvs = [] then 0 else 1) }
   | Array [] -> SArray SEmpty
   | Array items -> infer_seq (List.to_seq items)
   | Seq s -> infer_seq s
