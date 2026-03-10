@@ -29,7 +29,7 @@ let rec supports_simdjson_top_array_path (expr : Jx.Ast.expr) =
     && supports_simdjson_top_array_path right
   | _ -> false
 
-let run query_or_file input_source raw_output compact schema sample =
+let run query_or_file input_source raw_output compact schema sample no_const no_enum =
   let query_str, input_source =
     match (query_or_file, input_source, schema) with
     | None, _, true -> (".", input_source)
@@ -79,7 +79,11 @@ let run query_or_file input_source raw_output compact schema sample =
           if sample > 0 then Jx.Schema.infer_sampled ~n:sample result
           else Jx.Schema.infer result)
       in
-      let schema_val = Jx.Schema.to_value s |> Jx.Schema.add_schema_id in
+      let s = if no_const then Jx.Schema.strip_const s else s in
+      let s = if no_enum then Jx.Schema.strip_enum s else s in
+      let schema_val =
+        Jx.Schema.to_value s |> Jx.Schema.dedup |> Jx.Schema.add_schema_id
+      in
       let output =
         time "output" (fun () -> Jx.Printer.to_json ~compact schema_val)
       in
@@ -142,10 +146,18 @@ let sample =
   in
   Arg.(value & opt int 0 & info [ "n" ] ~docv:"N" ~doc)
 
+let no_const =
+  let doc = "Drop const annotations, promote to base type." in
+  Arg.(value & flag & info [ "no-const" ] ~doc)
+
+let no_enum =
+  let doc = "Drop enum annotations, promote to base type." in
+  Arg.(value & flag & info [ "no-enum" ] ~doc)
+
 let cmd =
   let doc = "A better query language for JSON" in
   let info = Cmd.info "jx" ~version:"0.1.0" ~doc in
   Cmd.v info
-    Term.(const run $ query $ input_file $ raw_output $ compact $ schema $ sample)
+    Term.(const run $ query $ input_file $ raw_output $ compact $ schema $ sample $ no_const $ no_enum)
 
 let () = exit (Cmd.eval' cmd)
