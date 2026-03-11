@@ -1,5 +1,9 @@
 let enum_threshold = 20
 
+let object_entries_list v =
+  Value.object_entries v
+  |> Array.to_list
+
 type schema =
   | SNull
   | SBoolean
@@ -247,7 +251,8 @@ let rec infer (v : Value.t) : schema =
   | BigInt z -> SEnum (SInteger, [ BigInt z ])
   | Float f -> SEnum (SNumber, [ Float f ])
   | String s -> SEnum (SString, [ String s ])
-  | Object kvs ->
+  | Object _ ->
+    let kvs = object_entries_list v in
     let properties = List.map (fun (k, v) -> (k, infer v)) kvs in
     let required = List.map fst kvs in
     SObject { properties; required; count = (if kvs = [] then 0 else 1) }
@@ -319,7 +324,7 @@ let rec to_value (s : schema) : Value.t =
   | SInteger -> type_obj "integer"
   | SNumber -> type_obj "number"
   | SString -> type_obj "string"
-  | SEnum (_, [ v ]) -> Value.Object [ ("const", v) ]
+  | SEnum (_, [ v ]) -> Value.object_of_fields [ ("const", v) ]
   | SEnum (SBoolean, vs)
     when List.length vs = 2
          && value_mem (Value.Bool true) vs
@@ -328,25 +333,25 @@ let rec to_value (s : schema) : Value.t =
   | SEnum (ty, vs) ->
     let type_fields =
       match to_value ty with
-      | Value.Object kvs -> kvs
+      | Value.Object _ as obj -> object_entries_list obj
       | _ -> []
     in
-    Value.Object (type_fields @ [ ("enum", Value.Array vs) ])
+    Value.object_of_fields (type_fields @ [ ("enum", Value.Array vs) ])
   | SEmpty | SArray SEmpty -> type_obj "array"
   | SArray items ->
-    Value.Object
+    Value.object_of_fields
       [ ("type", Value.String "array"); ("items", to_value items) ]
   | SObject obj -> (
     match try_as_map obj with
     | Some value_schema ->
-      Value.Object
+      Value.object_of_fields
         [
           ("type", Value.String "object");
           ("additionalProperties", to_value value_schema);
         ]
     | None ->
       let props =
-        Value.Object
+        Value.object_of_fields
           (List.map (fun (k, s) -> (k, to_value s)) obj.properties)
       in
       let fields =
@@ -362,7 +367,7 @@ let rec to_value (s : schema) : Value.t =
             ]
         else fields
       in
-      Value.Object fields)
+      Value.object_of_fields fields)
   | SOneOf schemas -> to_value_oneof schemas
 
 and nullable_simple s =
@@ -374,7 +379,7 @@ and nullable_simple s =
     | SString -> "string"
     | _ -> "string"
   in
-  Value.Object
+  Value.object_of_fields
     [
       ( "type",
         Value.Array [ Value.String type_name; Value.String "null" ] );
@@ -389,7 +394,7 @@ and nullable_enum ty vs =
     | SString -> "string"
     | _ -> "string"
   in
-  Value.Object
+  Value.object_of_fields
     [
       ( "type",
         Value.Array [ Value.String type_name; Value.String "null" ] );
@@ -405,15 +410,16 @@ and to_value_oneof schemas =
   | [ SNull; SEnum (ty, vs) ] when is_simple_type ty ->
     nullable_enum ty vs
   | schemas ->
-    Value.Object
+    Value.object_of_fields
       [ ("oneOf", Value.Array (List.map to_value schemas)) ]
 
-and type_obj name = Value.Object [ ("type", Value.String name) ]
+and type_obj name = Value.object_of_fields [ ("type", Value.String name) ]
 
 let rec normalize_value ?(sort_array = false) = function
-  | Value.Object kvs ->
+  | Value.Object _ as obj ->
+    let kvs = object_entries_list obj in
     let sorted = List.sort (fun (a, _) (b, _) -> String.compare a b) kvs in
-    Value.Object
+    Value.object_of_fields
       (List.map
          (fun (k, v) ->
            (k, normalize_value ~sort_array:(k = "required") v))
@@ -437,7 +443,8 @@ let dedup (root : Value.t) : Value.t =
   let canonical v = Printer.to_json ~compact:true (normalize_value v) in
   let rec collect parent_key v =
     match v with
-    | Value.Object kvs -> (
+    | Value.Object _ as obj -> (
+      let kvs = object_entries_list obj in
       let has_props =
         List.exists (fun (k, _) -> k = "properties") kvs
       in
@@ -482,7 +489,8 @@ let dedup (root : Value.t) : Value.t =
   else
     let rec rewrite v =
       match v with
-      | Value.Object kvs -> (
+      | Value.Object _ as obj -> (
+        let kvs = object_entries_list obj in
         let has_props =
           List.exists (fun (k, _) -> k = "properties") kvs
         in
@@ -490,13 +498,13 @@ let dedup (root : Value.t) : Value.t =
           let ser = canonical v in
           match Hashtbl.find_opt ref_map ser with
           | Some name ->
-            Value.Object
+            Value.object_of_fields
               [ ("$ref", Value.String ("#/$defs/" ^ name)) ]
           | None ->
-            Value.Object
+            Value.object_of_fields
               (List.map (fun (k, child) -> (k, rewrite child)) kvs)
         else
-          Value.Object
+          Value.object_of_fields
             (List.map (fun (k, child) -> (k, rewrite child)) kvs))
       | Value.Array items ->
         Value.Array (List.map rewrite items)
@@ -504,13 +512,13 @@ let dedup (root : Value.t) : Value.t =
     in
     let rewritten = rewrite root in
     let rewrite_children = function
-      | Value.Object kvs ->
-        Value.Object
-          (List.map (fun (k, child) -> (k, rewrite child)) kvs)
+      | Value.Object _ as obj ->
+        Value.object_of_fields
+          (List.map (fun (k, child) -> (k, rewrite child)) (object_entries_list obj))
       | v -> v
     in
     let defs_value =
-      Value.Object
+      Value.object_of_fields
         (Hashtbl.fold
            (fun name ser acc ->
              let parsed =
@@ -520,15 +528,16 @@ let dedup (root : Value.t) : Value.t =
            defs [])
     in
     match rewritten with
-    | Value.Object kvs ->
-      Value.Object (("$defs", defs_value) :: kvs)
+    | Value.Object _ as obj ->
+      Value.object_of_fields
+        (("$defs", defs_value) :: object_entries_list obj)
     | _ -> rewritten
 
 let add_schema_id (v : Value.t) : Value.t =
   match v with
-  | Value.Object kvs ->
-    Value.Object
+  | Value.Object _ as obj ->
+    Value.object_of_fields
       (( "$schema",
          Value.String "https://json-schema.org/draft/2020-12/schema" )
-      :: kvs)
+      :: object_entries_list obj)
   | _ -> v
