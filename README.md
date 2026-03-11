@@ -43,7 +43,46 @@ jx -r '.name' data.json
 
 # Compact output
 jx -c '.' data.json
+
+# Infer schema for a query result
+jx --schema '.users' data.json
+
+# Infer schema for a file with the default identity query
+jx --schema -f data.json
+
+# Sample only the first 100 elements during schema inference
+jx --schema -n 100 '.items' data.json
+
+# Drop const/enum annotations and keep only base types
+jx --schema --no-const --no-enum '.items' data.json
 ```
+
+## Schema Inference
+
+`jx --schema` evaluates the query first, then infers a JSON Schema
+(draft 2020-12) from the result.
+
+```bash
+# Schema for the whole input
+jx --schema '.' data.json
+
+# Schema for a nested collection
+jx --schema '.users' data.json
+
+# File-only mode: use the default identity query
+jx --schema -f data.json
+
+# Limit inference to the first N elements
+jx --schema -n 100 '.items' data.json
+
+# Suppress const and enum annotations
+jx --schema --no-const --no-enum '.items' data.json
+```
+
+CLI rule of thumb:
+- first positional argument is always `QUERY`
+- second positional argument is always `FILE`
+- if you want schema from a file with no explicit query, use `-f` / `--file`
 
 ## Three Rules
 
