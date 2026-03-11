@@ -29,18 +29,21 @@ let rec supports_simdjson_top_array_path (expr : Jx.Ast.expr) =
     && supports_simdjson_top_array_path right
   | _ -> false
 
-let run query_or_file input_source raw_output compact schema sample no_const no_enum =
-  let query_str, input_source =
-    match (query_or_file, input_source, schema) with
-    | None, _, true -> (".", input_source)
-    | None, _, false ->
+let run query input_file file_opt raw_output compact schema sample no_const no_enum =
+  let resolved =
+    match Jx.Cli_args.resolve ~query ~input_file ~input_opt:file_opt ~schema with
+    | Ok resolved -> resolved
+    | Error Jx.Cli_args.Missing_query ->
       Printf.eprintf "error: QUERY argument is required\n";
       exit 1
-    | Some q, None, true
-      when Sys.file_exists q && q.[0] <> '.' && not (String.contains q ' ') ->
-      (".", Some q)
-    | Some q, file, _ -> (q, file)
+    | Error (Jx.Cli_args.Duplicate_input (a, b)) ->
+      Printf.eprintf
+        "error: input file provided twice (%s and %s); use FILE or --file, not both\n"
+        a b;
+      exit 1
   in
+  let query_str = resolved.query in
+  let input_source = resolved.input_source in
   try
     let ast = time "parse query" (fun () -> Jx.Parser.parse query_str) in
     let json_str =
@@ -128,6 +131,12 @@ let input_file =
   let doc = "Input JSON file. Reads from stdin if not provided." in
   Arg.(value & pos 1 (some string) None & info [] ~docv:"FILE" ~doc)
 
+let file_opt =
+  let doc =
+    "Input JSON file. Use this when omitting QUERY, for example with --schema."
+  in
+  Arg.(value & opt (some string) None & info [ "f"; "file" ] ~docv:"FILE" ~doc)
+
 let raw_output =
   let doc = "Output raw strings without quotes." in
   Arg.(value & flag & info [ "r"; "raw-output" ] ~doc)
@@ -158,6 +167,6 @@ let cmd =
   let doc = "A better query language for JSON" in
   let info = Cmd.info "jx" ~version:"0.1.0" ~doc in
   Cmd.v info
-    Term.(const run $ query $ input_file $ raw_output $ compact $ schema $ sample $ no_const $ no_enum)
+    Term.(const run $ query $ input_file $ file_opt $ raw_output $ compact $ schema $ sample $ no_const $ no_enum)
 
 let () = exit (Cmd.eval' cmd)

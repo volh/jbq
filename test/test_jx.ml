@@ -20,6 +20,41 @@ let eval_stream_str query json_str =
   let result = Jx.Interpreter.eval [] input ast in
   Jx.Printer.to_json ~compact:true result
 
+let test_cli_args_resolve_missing_query () =
+  Alcotest.(check bool) "missing query rejected" true
+    (match Jx.Cli_args.resolve ~query:None ~input_file:None ~input_opt:None ~schema:false with
+     | Error Jx.Cli_args.Missing_query -> true
+     | _ -> false)
+
+let test_cli_args_resolve_schema_file_flag () =
+  Alcotest.(check (option string)) "schema file flag becomes input source"
+    (Some "data.json")
+    (match
+       Jx.Cli_args.resolve ~query:None ~input_file:None
+         ~input_opt:(Some "data.json") ~schema:true
+     with
+    | Ok resolved -> resolved.input_source
+    | Error _ -> None)
+
+let test_cli_args_resolve_duplicate_input () =
+  Alcotest.(check bool) "duplicate input rejected" true
+    (match
+       Jx.Cli_args.resolve ~query:(Some ".") ~input_file:(Some "a.json")
+         ~input_opt:(Some "b.json") ~schema:true
+     with
+    | Error (Jx.Cli_args.Duplicate_input ("a.json", "b.json")) -> true
+    | _ -> false)
+
+let test_cli_args_resolve_query_stays_query () =
+  Alcotest.(check string) "positional token stays query"
+    "./users.json"
+    (match
+       Jx.Cli_args.resolve ~query:(Some "./users.json") ~input_file:None
+         ~input_opt:None ~schema:true
+     with
+    | Ok resolved -> resolved.query
+    | Error _ -> "")
+
 let test_simdjson_available () =
   Alcotest.(check bool) "simdjson available" true (Jx.Simdjson_native.available ())
 
@@ -892,6 +927,13 @@ let () =
           Alcotest.test_case "stream last" `Quick test_simdjson_stream_last;
           Alcotest.test_case "stream where map count" `Quick test_simdjson_stream_where_map_count;
           Alcotest.test_case "stream flatmap" `Quick test_flatmap_stream;
+        ] );
+      ( "cli",
+        [
+          Alcotest.test_case "missing query" `Quick test_cli_args_resolve_missing_query;
+          Alcotest.test_case "schema file flag" `Quick test_cli_args_resolve_schema_file_flag;
+          Alcotest.test_case "duplicate input" `Quick test_cli_args_resolve_duplicate_input;
+          Alcotest.test_case "query stays query" `Quick test_cli_args_resolve_query_stays_query;
         ] );
       ( "core",
         [
