@@ -258,12 +258,12 @@ let rec infer (v : Value.t) : schema =
     infer_seq (List.to_seq (!Value.xd_run_ref xd (Value.to_seq_of source)))
 
 and infer_seq seq =
+  let merge_inferred acc v =
+    let s = infer v in
+    match acc with None -> Some s | Some prev -> Some (merge prev s)
+  in
   let item_schema =
-    Seq.fold_left
-      (fun acc v ->
-        let s = infer v in
-        match acc with None -> Some s | Some prev -> Some (merge prev s))
-      None seq
+    Seq.fold_left merge_inferred None seq
   in
   match item_schema with None -> SArray SEmpty | Some s -> SArray s
 
@@ -275,8 +275,15 @@ let infer_sampled ~n (v : Value.t) : schema =
     | Array items -> infer_seq (List.to_seq items |> Seq.take n)
     | Seq s -> infer_seq (Seq.take n s)
     | Xd (source, xd) ->
-      let items = !Value.xd_run_ref xd (Value.to_seq_of source) in
-      infer_seq (List.to_seq items |> Seq.take n)
+      let limited = Transducer.compose xd (Transducer.take n) in
+      let merge_inferred acc v =
+        let s = infer v in
+        match acc with None -> Some s | Some prev -> Some (merge prev s)
+      in
+      let item_schema =
+        Transducer.fold limited merge_inferred None (Value.to_seq_of source)
+      in
+      (match item_schema with None -> SArray SEmpty | Some s -> SArray s)
     | _ -> infer v
 
 let rec strip_const = function

@@ -543,6 +543,13 @@ let schema_query_str query json_str =
   let result = Jx.Interpreter.eval [] input ast in
   schema_of result
 
+let schema_sampled_query_str ~n query json_str =
+  let input = Jx.Simdjson_native.parse_value json_str in
+  let ast = Jx.Parser.parse query in
+  let result = Jx.Interpreter.eval [] input ast in
+  let s = Jx.Schema.infer_sampled ~n result in
+  Jx.Printer.to_json ~compact:true (Jx.Schema.to_value s)
+
 let schema_sampled_str ~n json_str =
   let input = Jx.Simdjson_native.parse_value json_str in
   let s = Jx.Schema.infer_sampled ~n input in
@@ -657,6 +664,11 @@ let test_schema_sampled () =
   Alcotest.(check string) "sampled schema only sees first N"
     {|{"type":"array","items":{"type":"integer","enum":[1,2]}}|}
     (schema_sampled_str ~n:2 {|[1,2,"three","four"]|})
+
+let test_schema_sampled_infinite_xd () =
+  Alcotest.(check string) "sampled schema stops on infinite transducer output"
+    {|{"type":"array","items":{"type":"integer","enum":[0,1,2]}}|}
+    (schema_sampled_query_str ~n:3 "range | map ." "null")
 
 let test_schema_bigint () =
   Alcotest.(check string) "bigint const"
@@ -995,6 +1007,7 @@ let () =
           Alcotest.test_case "nested merge" `Quick test_schema_nested_merge;
           Alcotest.test_case "with query" `Quick test_schema_with_query;
           Alcotest.test_case "sampled" `Quick test_schema_sampled;
+          Alcotest.test_case "sampled infinite xd" `Quick test_schema_sampled_infinite_xd;
           Alcotest.test_case "bigint" `Quick test_schema_bigint;
           Alcotest.test_case "enum detection" `Quick test_schema_enum_detection;
           Alcotest.test_case "const detection" `Quick test_schema_const_detection;
