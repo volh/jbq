@@ -20,6 +20,12 @@ let eval_stream_str query json_str =
   let result = Jx.Interpreter.eval [] input ast in
   Jx.Printer.to_json ~compact:true result
 
+let eval_error_kind query json_str =
+  try
+    ignore (eval_str query json_str);
+    None
+  with Jx.Error.Jx_error err -> Some err.kind
+
 let test_cli_args_resolve_missing_query () =
   Alcotest.(check bool) "missing query rejected" true
     (match Jx.Cli_args.resolve ~query:None ~input_file:None ~input_opt:None ~schema:false with
@@ -416,6 +422,62 @@ let test_pick_semicolon_args () =
     {|{"name":"Alice","email":"a@b.com"}|}
     (eval_str "pick .name; .email"
        {|{"name":"Alice","email":"a@b.com","age":30}|})
+
+let test_get_nested_path () =
+  Alcotest.(check string)
+    "get reads nested path"
+    "\"Kyiv\""
+    (eval_str "get .user.address.city"
+       {|{"user":{"address":{"city":"Kyiv"}}}|})
+
+let test_get_indexed_path () =
+  Alcotest.(check string)
+    "get reads indexed path"
+    "\"Ada\""
+    (eval_str "get .users[0].name"
+       {|{"users":[{"name":"Ada"},{"name":"Linus"}]}|})
+
+let test_get_stays_exact () =
+  Alcotest.(check bool) "get does not auto-traverse arrays" true
+    (match
+       eval_error_kind "get .orders.items.name"
+         {|{"orders":[{"items":[{"name":"W"}]}]}|}
+     with
+    | Some Jx.Error.Type_mismatch -> true
+    | _ -> false)
+
+let test_has_nested_true () =
+  Alcotest.(check string)
+    "has reports existing nested path"
+    "true"
+    (eval_str "has .config.features.dark_mode"
+       {|{"config":{"features":{"dark_mode":true}}}|})
+
+let test_has_nested_false () =
+  Alcotest.(check string)
+    "has reports missing nested path"
+    "false"
+    (eval_str "has .config.features.dark_mode" {|{"config":{"features":{}}}|})
+
+let test_has_index_false () =
+  Alcotest.(check string)
+    "has reports missing index"
+    "false"
+    (eval_str "has .users[2].name" {|{"users":[{"name":"Ada"}]}|})
+
+let test_pluck_simple () =
+  Alcotest.(check string)
+    "pluck traverses one collection step"
+    {|["Ada","Linus"]|}
+    (eval_str "pluck .users .name"
+       {|{"users":[{"name":"Ada"},{"name":"Linus"}]}|})
+
+let test_pluck_nested () =
+  Alcotest.(check string)
+    "pluck traverses nested collections"
+    {|["W","G","D"]|}
+    (eval_str "pluck .orders .items .name"
+       {|{"orders":[{"items":[{"name":"W"},{"name":"G"}]},{"items":[{"name":"D"}]}]}|})
 
 let test_spaced_postfix_rejected () =
   Alcotest.(check bool) "spaced postfix does not chain" true
@@ -976,6 +1038,14 @@ let () =
           Alcotest.test_case "group_by" `Quick test_group_by;
           Alcotest.test_case "pick spaced args" `Quick test_pick_space_separated_args;
           Alcotest.test_case "pick semicolon args" `Quick test_pick_semicolon_args;
+          Alcotest.test_case "get nested path" `Quick test_get_nested_path;
+          Alcotest.test_case "get indexed path" `Quick test_get_indexed_path;
+          Alcotest.test_case "get stays exact" `Quick test_get_stays_exact;
+          Alcotest.test_case "has nested true" `Quick test_has_nested_true;
+          Alcotest.test_case "has nested false" `Quick test_has_nested_false;
+          Alcotest.test_case "has index false" `Quick test_has_index_false;
+          Alcotest.test_case "pluck simple" `Quick test_pluck_simple;
+          Alcotest.test_case "pluck nested" `Quick test_pluck_nested;
           Alcotest.test_case "spaced postfix rejected" `Quick test_spaced_postfix_rejected;
           Alcotest.test_case "unique" `Quick test_unique;
           Alcotest.test_case "unique objects" `Quick test_unique_objects;

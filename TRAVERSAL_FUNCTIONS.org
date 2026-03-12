@@ -1,0 +1,195 @@
+#+TITLE: Traversal Functions
+#+DATE: 2026-03-12
+
+* Decision
+
+jx will not make plain path syntax collection-aware.
+
+This is the hard rule:
+
+- the same path syntax must keep the same cardinality contract
+- key/index/slice semantics must not change based on runtime data shape
+- cardinality changes must be visible in the source as named functions
+
+So:
+
+- =.user.address.city= stays an exact selector
+- =.users[0].name= stays an exact selector
+- =.orders.items.name= does *not* silently traverse arrays
+- =[]= does *not* become jq-style iteration syntax
+
+If a query needs to cross collections or collect multiple matches, it must say
+so with a function.
+
+* Why This Boundary Matters
+
+The rejected model was: "the path looks the same, but if it crosses an array it
+becomes plural." That is not acceptable for jx.
+
+The reasons are simple:
+
+- humans cannot reliably predict output shape from the source alone
+- agents need extra examples to infer when a path is singular vs plural
+- field access stops being a stable data operation and becomes hidden control flow
+- the language gains two traversal systems: path magic and collection functions
+
+jx is better served by a small set of verbs with fixed contracts.
+
+* What Does Not Change
+
+These remain exactly what they are today:
+
+- =.field= — field access
+- =.[0]= — exact index
+- =.[a:b]= — slice
+- =.field?= — optional field access
+- =pick= / =omit= — object projection, not traversal
+- =keys= / =values= — object inspection, not traversal
+- =map= / =flatmap= / =where= — collection functions
+
+No semantic change to keys, grouping, indexing, or path syntax.
+
+* Function Split
+
+** Exact Access
+
+Use a singular function for exact lookup.
+
+- =get path= — return exactly one value
+- =has path= — boolean existence check under the same exact-path rules
+
+Examples:
+
+#+begin_src
+get .user.address.city
+get .users[0].name
+has .config.features.dark_mode
+#+end_src
+
+=get= is the Clojure-like side of the design: exact path, no implicit traversal.
+
+** Existing Collection Verbs
+
+These keep their current meaning:
+
+- =map expr= — one output per input element
+- =flatmap expr= — zero/one/many outputs per input element, flatten one level
+- =where expr= — filter current collection
+
+Examples:
+
+#+begin_src
+items | map .name
+items | flatmap .orders
+items | where .active
+#+end_src
+
+** Explicit Traversal
+
+Add one new verb for the repetitive nested traversal case.
+
+Recommended public name: =pluck=
+
+Semantics:
+
+- takes path segments/selectors as arguments
+- crosses collections explicitly
+- collects all final matches
+- always returns a collection result
+
+Examples:
+
+#+begin_src
+pluck .orders .items .name
+pluck .groups .members
+pluck .users .emails
+#+end_src
+
+This is the compact replacement for repeated =flatmap= chains:
+
+#+begin_src
+pluck .orders .items .name
+#+end_src
+
+means:
+
+#+begin_src
+flatmap .orders | flatmap .items | flatmap .name
+#+end_src
+
+This works cleanly because =flatmap= over a scalar is already equivalent to
+=map=. There is no need for a special "last segment uses map" rule.
+
+The cardinality contract stays obvious:
+
+- =get= returns one value
+- =pluck= returns many values (as a collection)
+
+That difference is in the *function name*, not hidden in the path.
+
+* Naming
+
+=pluck= is the best short name for now.
+
+Why:
+
+- concise
+- familiar as "extract these values"
+- clearly different from =get=
+- clearly different from =pick=, which is object projection
+
+Alternatives:
+
+- =drill= — good nested-array feel, but less standard
+- =traverse= — clearest, but longer
+
+* Examples
+
+Given:
+
+#+begin_src json
+{
+  "user": {"address": {"city": "Kyiv"}},
+  "users": [{"name": "Ada"}, {"name": "Linus"}],
+  "orders": [
+    {"items": [{"name": "W"}, {"name": "G"}]},
+    {"items": [{"name": "D"}]}
+  ]
+}
+#+end_src
+
+Then:
+
+#+begin_src
+get .user.address.city        => "Kyiv"
+get .users[0].name            => "Ada"
+pluck .users .name            => ["Ada", "Linus"]
+pluck .orders .items .name    => ["W", "G", "D"]
+pick .user .orders            => {"user": ..., "orders": ...}
+#+end_src
+
+Each query advertises its shape:
+
+- =get= is singular
+- =pluck= is plural
+- =pick= is projection
+
+* Non-Goals
+
+This proposal does *not* do any of the following:
+
+- add jq-compatible =[]= iteration
+- make bare paths auto-traverse collections
+- make =pick= accept traversal semantics
+- make output shape depend on whether runtime data happened to contain an array
+
+* Summary
+
+The language line should be:
+
+- paths are selectors
+- functions are where cardinality changes live
+- exact access and plural traversal must use different verbs
+
+That keeps the language readable, teachable, and legible to both humans and
+agents.

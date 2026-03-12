@@ -67,6 +67,7 @@ let all_fn_names =
     "sum"; "min"; "max"; "avg";
     "lower"; "upper"; "trim"; "truncate"; "split"; "join";
     "keys"; "values"; "pick"; "omit";
+    "get"; "has"; "pluck";
     "type"; "to_string"; "to_number";
     "range";
   ]
@@ -89,8 +90,57 @@ let eval_per_item env expr item =
   | Lambda { param; body; _ } -> eval_in_ctx ((param, item) :: env) item body
   | _ -> eval_in_ctx env item expr
 
+let rec is_selector_expr = function
+  | Identity | Field _ | Index _ -> true
+  | Pipe { left; right } -> is_selector_expr left && is_selector_expr right
+  | _ -> false
+
+let require_selector name expr loc =
+  if not (is_selector_expr expr) then
+    Error.raise_ ~loc Type_mismatch
+      (Printf.sprintf "%s requires path argument" name)
+
+let exact_lookup_failed = function
+  | Error.Jx_error
+      {
+        kind =
+          (Key_not_found | Index_out_of_bounds | Null_access | Type_mismatch);
+        _;
+      } ->
+    true
+  | _ -> false
+
 let dispatch env input name args loc =
   match (name, args) with
+  (* === Exact selectors / explicit traversal === *)
+  | "get", [ expr ] ->
+    require_selector "get" expr loc;
+    eval_in_ctx env input expr
+  | "get", _ ->
+    Error.raise_ ~loc Arity_mismatch "get takes exactly one path"
+  | "has", [ expr ] ->
+    require_selector "has" expr loc;
+    let exists =
+      try
+        ignore (eval_in_ctx env input expr);
+        true
+      with exn -> if exact_lookup_failed exn then false else raise exn
+    in
+    Value.Bool exists
+  | "has", _ ->
+    Error.raise_ ~loc Arity_mismatch "has takes exactly one path"
+  | "pluck", [] ->
+    Error.raise_ ~loc Arity_mismatch "pluck takes at least one path"
+  | "pluck", exprs ->
+    List.iter (fun expr -> require_selector "pluck" expr loc) exprs;
+    let seed =
+      if Value.is_collection input then input else Value.Array [ input ]
+    in
+    List.fold_left
+      (fun acc expr ->
+        xd_compose acc (Transducer.flatmap (eval_per_item env expr)))
+      seed exprs
+
   (* === Transducible collection functions === *)
   | "where", [ pred ] ->
     require_collection "where" input loc;

@@ -115,6 +115,17 @@ indexing.
 .name | lower | truncate 20
 ```
 
+### Exact Access and Traversal
+
+Paths stay exact. When cardinality changes, the query must say so with a
+function.
+
+```
+get .user.address.city
+has .config.features.dark_mode
+pluck .orders .items .name
+```
+
 ### Function arguments
 
 ```
@@ -172,6 +183,7 @@ items | map (x => {name: x.name, total: x.price * x.qty})
 |---|---|
 | `where expr` | filter by predicate |
 | `map expr` | transform each element |
+| `flatmap expr` | transform each element, flatten one level |
 | `sort_by expr` | sort by expression |
 | `group_by expr` | group into object |
 | `unique` | deduplicate, preserve order |
@@ -212,6 +224,9 @@ items | map (x => {name: x.name, total: x.price * x.qty})
 
 | Function | Description |
 |---|---|
+| `get path` | exact lookup |
+| `has path` | boolean exact-path existence check |
+| `pluck p1 p2 ...` | explicit traversal across nested collections |
 | `keys` | extract keys |
 | `values` | extract values |
 | `pick k1 k2` | select specific keys |
@@ -236,6 +251,7 @@ items | map (x => {name: x.name, total: x.price * x.qty})
 | **String concat** | `(.first) + " " + (.last)`              | `.first ++ " " ++ .last`                                       |
 | **String ops**    | `ascii_downcase`, `ltrimstr`            | `lower`, `trim`, `truncate`                                    |
 | **Null access**   | Silent null propagation                 | Error by default, `?` for optional                             |
+| **Exact/traverse**| `.users[0].name` / `.users[].name`     | `get .users[0].name` / `pluck .users .name`                    |
 | **Sort**          | `sort_by(.price)`                       | `sort_by .price`                                               |
 | **Subsets**       | `{name, email}` (only top-level)        | `pick .name .email` / `omit .password`                         |
 | **Arg separator** | Nested parens                           | Whitespace or semicolons: `pick .name .email`                  |
