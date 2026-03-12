@@ -1,0 +1,107 @@
+#+title: Error Handling
+#+date: 2026-03-12
+
+* Current State
+
+Our error type lives in =lib/error.ml=:
+
+#+begin_src ocaml
+type kind =
+  | Parse_error
+  | Key_not_found
+  | Index_out_of_bounds
+  | Type_mismatch
+  | Null_access
+  | Unknown_function
+  | Arity_mismatch
+  | Runtime_error
+
+type t = {
+  kind : kind;
+  message : string;
+  loc : Ast.loc option;
+  suggestion : string option;
+}
+#+end_src
+
+Output format is plain text: =error[kind]: message=, a caret pointer into the
+source, and an optional =help:= line.
+
+No terminal color. No structured context. Callers pass raw strings directly:
+
+#+begin_src ocaml
+Error.raise_ ~loc Type_mismatch "slice index must be integer"
+Error.raise_ ~loc Runtime_error "division by zero"
+#+end_src
+
+The =suggestion= field exists but is used in only one callsite
+(=interpreter.ml:73=, for key-not-found). Everything else ignores it.
+
+* What query-json Does
+
+query-json's =Error.ml= has the same outer shape (kind + message + location +
+suggestion) but adds a structured =context= list:
+
+#+begin_src ocaml
+type context =
+  | Json_value of Json.t      (* the actual value that caused the error *)
+  | Expected of string
+  | Found of string
+  | Available_keys of string list
+  | Example of string
+  | Usage of string
+  | Description of string
+  | Applicable_to of string
+#+end_src
+
+Errors are built via smart constructors that bundle the right contexts:
+
+#+begin_src ocaml
+let key_not_found ~key ~json ~available_keys =
+  make ~kind:"key_not_found"
+    ~message:(Printf.sprintf "key `%s` not found" key)
+    ~contexts:[ Json_value json; Available_keys available_keys ]
+    ~suggestion:(Printf.sprintf "use `.%s?` for optional access" key)
+    ()
+#+end_src
+
+So a key-not-found error shows: the message, the JSON value it was applied to,
+the available keys, and a hint about optional access — all structured, not
+concatenated.
+
+query-json also handles multi-line source (finds the right line by offset),
+colorizes output via =Console_style=, and distinguishes =lexer_error=,
+=parse_error=, and =semantic_error= at the constructor level.
+
+* The Gap
+
+| Aspect              | jx-schema          | query-json                    |
+|---------------------+--------------------+-------------------------------|
+| Kind representation | variant type       | string (open, flexible)       |
+| Context             | none (flat string) | structured list               |
+| Smart constructors  | none               | key_not_found, type_mismatch… |
+| Suggestion usage    | 1 callsite         | every relevant error          |
+| Color               | no                 | yes (Console_style)           |
+| Multi-line source   | no                 | yes                           |
+
+The structure is right. The execution is thin. query-json's errors feel polished
+precisely because each error type carries its own context schema — callers
+cannot forget to include the relevant value or available keys because the
+constructor requires them.
+
+* What To Do About It
+
+The two changes with highest return:
+
+1. *Smart constructors.* Add typed constructors for the common cases
+   (=key_not_found=, =type_mismatch=, =index_out_of_bounds=). Enforce that
+   callers pass the actual value and context rather than crafting a message
+   string. This makes errors consistent without requiring callers to think about
+   formatting.
+
+2. *Context list.* Add =Available_keys= at minimum. When a key is not found,
+   show what keys are present. This is the single highest-value addition for
+   usability.
+
+Color and multi-line source are nice-to-have; the above two are the structural
+gap worth closing.
