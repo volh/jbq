@@ -1,33 +1,71 @@
-let cx    = .canvas.w / 2                                            in
-let bbase = .canvas.h * 9 / 10                                       in
-let btop  = (bbase) - .brace.size * .brace.top_frac / 100           in
-let bmid  = (bbase) - .brace.size * .brace.mid_frac / 100           in
-let bx    = (cx) - .brace.size * 44 / 100                           in
+let cx       = .canvas.w / 2                                          in
+let bbase    = .canvas.h * 9 / 10                                     in
+let btop     = (bbase) - .brace.size * .brace.top_frac / 100         in
+let bmid     = (bbase) - .brace.size * .brace.mid_frac / 100         in
+let brace_x  = (cx) - .brace.size * 44 / 100                         in
 
-let hby = (btop) - 4                                                 in
-let hbx = (cx) - .hat.brim_w / 2                                    in
-let hcy = (hby) - .hat.crown_h                                       in
-let hcx = (cx) - .hat.crown_w / 2                                   in
+let crown_y  = (btop) - 4 - .hat.crown_h                             in
+let crown_x  = (cx) - .hat.crown_w / 2                               in
+let brim_y   = (btop) - 4                                             in
+let brim_x   = (cx) - .hat.brim_w / 2                                in
 
-let glx = (cx) - .glasses.bridge / 2 - .glasses.lens_w              in
-let grx = (cx) + .glasses.bridge / 2                                in
-let gly = (bmid) - .glasses.lens_h / 2                              in
+let lens_l_x = (cx) - .glasses.bridge / 2 - .glasses.lens_w          in
+let lens_r_x = (cx) + .glasses.bridge / 2                            in
+let lens_y   = (bmid) - .glasses.lens_h / 2                          in
 
-let gx  = (cx) + .brace.size * 48 / 100                             in
-let gy  = (bmid) - .gun.h / 2                                       in
+let bridge_x1 = (lens_l_x) + .glasses.lens_w                         in
+let bridge_y  = (lens_y) + .glasses.lens_h / 2                       in
 
-let parts = [
-  "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 ${.canvas.w} ${.canvas.h}'>",
-  "<rect x='${hcx}' y='${hcy}' width='${.hat.crown_w}' height='${.hat.crown_h}' fill='${.colors.hat}'/>",
-  "<rect x='${hbx}' y='${hby}' width='${.hat.brim_w}' height='${.hat.brim_h}' fill='${.colors.hat}'/>",
-  "<text x='${bx}' y='${bbase}' font-size='${.brace.size}' font-family='monospace' fill='${.colors.body}'>{}</text>",
-  "<rect x='${glx}' y='${gly}' width='${.glasses.lens_w}' height='${.glasses.lens_h}' rx='${.glasses.rx}' fill='${.colors.lens}' opacity='${.colors.lens_opacity}'/>",
-  "<rect x='${grx}' y='${gly}' width='${.glasses.lens_w}' height='${.glasses.lens_h}' rx='${.glasses.rx}' fill='${.colors.lens}' opacity='${.colors.lens_opacity}'/>",
-  "<line x1='${(glx) + .glasses.lens_w}' y1='${(gly) + .glasses.lens_h / 2}' x2='${grx}' y2='${(gly) + .glasses.lens_h / 2}' stroke='${.colors.bridge}' stroke-width='2'/>",
-  "<rect x='${gx}' y='${gy}' width='${.gun.w}' height='${.gun.h}' fill='${.colors.gun}'/>",
-  "<rect x='${(gx) + .gun.w}' y='${(gy) + (.gun.h - .gun.barrel_h) / 2}' width='${.gun.barrel_w}' height='${.gun.barrel_h}' fill='${.colors.gun}'/>",
-  "<rect x='${(gx) + .gun.w * 6 / 10}' y='${(gy) + .gun.h}' width='${.gun.handle_w}' height='${.gun.handle_h}' fill='${.colors.gun}'/>",
-  "</svg>"
-] in
+let gun_x      = (cx) + .brace.size * 48 / 100                       in
+let gun_y      = (bmid) - .gun.h / 2                                  in
+let barrel_x   = (gun_x) + .gun.w                                     in
+let barrel_y   = (gun_y) + (.gun.h - .gun.barrel_h) / 2              in
+let grip_x     = (gun_x) + .gun.w * 6 / 10                           in
+let grip_y     = (gun_y) + .gun.h                                     in
 
-parts | join("")
+{
+  canvas_w:      .canvas.w,
+  canvas_h:      .canvas.h,
+
+  crown_x:       crown_x,
+  crown_y:       crown_y,
+  crown_w:       .hat.crown_w,
+  crown_h:       .hat.crown_h,
+  brim_x:        brim_x,
+  brim_y:        brim_y,
+  brim_w:        .hat.brim_w,
+  brim_h:        .hat.brim_h,
+  hat_color:     .colors.hat,
+
+  brace_x:       brace_x,
+  brace_y:       bbase,
+  brace_size:    .brace.size,
+  brace_color:   .colors.body,
+
+  lens_l_x:      lens_l_x,
+  lens_r_x:      lens_r_x,
+  lens_y:        lens_y,
+  lens_w:        .glasses.lens_w,
+  lens_h:        .glasses.lens_h,
+  lens_corner:   .glasses.rx,
+  lens_color:    .colors.lens,
+  lens_opacity:  .colors.lens_opacity,
+  bridge_x1:     bridge_x1,
+  bridge_x2:     lens_r_x,
+  bridge_y:      bridge_y,
+  bridge_color:  .colors.bridge,
+
+  gun_x:         gun_x,
+  gun_y:         gun_y,
+  gun_w:         .gun.w,
+  gun_h:         .gun.h,
+  barrel_x:      barrel_x,
+  barrel_y:      barrel_y,
+  barrel_w:      .gun.barrel_w,
+  barrel_h:      .gun.barrel_h,
+  grip_x:        grip_x,
+  grip_y:        grip_y,
+  grip_w:        .gun.handle_w,
+  grip_h:        .gun.handle_h,
+  gun_color:     .colors.gun
+}
