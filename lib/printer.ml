@@ -24,11 +24,18 @@ let float_needs_period s =
   in
   loop 0
 
+let raise_non_finite_float f =
+  let kind =
+    if classify_float f = FP_nan then "NaN"
+    else if f > 0. then "Infinity"
+    else "-Infinity"
+  in
+  Error.raise_ Runtime_error
+    (Printf.sprintf "cannot render non-finite float %s as JSON" kind)
+
 let write_float buf f =
   match classify_float f with
-  | FP_nan -> Buffer.add_string buf "NaN"
-  | FP_infinite ->
-    Buffer.add_string buf (if f > 0. then "Infinity" else "-Infinity")
+  | FP_nan | FP_infinite -> raise_non_finite_float f
   | _ ->
     let s16 = Printf.sprintf "%.16g" f in
     let s =

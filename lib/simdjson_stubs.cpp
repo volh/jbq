@@ -76,7 +76,7 @@ value alloc_value_object(value fields) {
   CAMLlocal1(result);
   static const value *closure = nullptr;
   if (closure == nullptr) {
-    closure = caml_named_value("jx_simdjson_object_of_fields");
+    closure = caml_named_value("jbq_simdjson_object_of_fields");
     if (closure == nullptr) {
       fail("object constructor callback is not registered");
     }
@@ -90,7 +90,7 @@ value alloc_value_bigint(std::string_view s) {
   CAMLlocal2(arg, result);
   static const value *closure = nullptr;
   if (closure == nullptr) {
-    closure = caml_named_value("jx_simdjson_bigint_value_of_string");
+    closure = caml_named_value("jbq_simdjson_bigint_value_of_string");
     if (closure == nullptr) {
       fail("bigint constructor callback is not registered");
     }
@@ -377,7 +377,7 @@ void finalize_stream(value v) {
 }
 
 custom_operations stream_ops = {
-    const_cast<char *>("jx.simdjson.top_array_stream"),
+    const_cast<char *>("jbq.simdjson.top_array_stream"),
     finalize_stream,
     custom_compare_default,
     custom_hash_default,
@@ -394,19 +394,19 @@ value alloc_stream(top_array_stream *stream) {
 
 } // namespace
 
-extern "C" CAMLprim value jx_simdjson_available(value unit) {
+extern "C" CAMLprim value jbq_simdjson_available(value unit) {
   CAMLparam1(unit);
   CAMLreturn(Val_true);
 }
 
-extern "C" CAMLprim value jx_simdjson_version(value unit) {
+extern "C" CAMLprim value jbq_simdjson_version(value unit) {
   CAMLparam1(unit);
   CAMLlocal1(result);
   result = caml_copy_string(SIMDJSON_VERSION);
   CAMLreturn(result);
 }
 
-extern "C" CAMLprim value jx_simdjson_top_array_stream_create(value json) {
+extern "C" CAMLprim value jbq_simdjson_top_array_stream_create(value json) {
   CAMLparam1(json);
   CAMLlocal1(result);
   try {
@@ -419,7 +419,7 @@ extern "C" CAMLprim value jx_simdjson_top_array_stream_create(value json) {
   }
 }
 
-extern "C" CAMLprim value jx_simdjson_top_array_stream_next_raw(value stream) {
+extern "C" CAMLprim value jbq_simdjson_top_array_stream_next_raw(value stream) {
   CAMLparam1(stream);
   CAMLlocal2(result, payload);
   try {
@@ -436,7 +436,7 @@ extern "C" CAMLprim value jx_simdjson_top_array_stream_next_raw(value stream) {
   }
 }
 
-extern "C" CAMLprim value jx_simdjson_top_array_stream_next_value(value stream) {
+extern "C" CAMLprim value jbq_simdjson_top_array_stream_next_value(value stream) {
   CAMLparam1(stream);
   try {
     CAMLreturn(stream_val(stream)->next_value());
@@ -445,7 +445,7 @@ extern "C" CAMLprim value jx_simdjson_top_array_stream_next_value(value stream) 
   }
 }
 
-extern "C" CAMLprim value jx_simdjson_parse_value(value json) {
+extern "C" CAMLprim value jbq_simdjson_parse_value(value json) {
   CAMLparam1(json);
   try {
     std::string source(String_val(json), caml_string_length(json));

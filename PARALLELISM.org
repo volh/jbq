@@ -1,4 +1,4 @@
-#+TITLE: Parallelism Analysis for jx
+#+TITLE: Parallelism Analysis for jbq
 #+DATE: 2026-03-09
 
 * jq: Zero Parallelism
@@ -25,7 +25,7 @@ Bytecode Interpreter (single thread)
 Results (one per jq_next() call)
 #+end_example
 
-* jx: Also Zero Parallelism (But Better Foundation)
+* jbq: Also Zero Parallelism (But Better Foundation)
 
 Tree-walk interpreter, single-threaded. But the transducer pipeline is a stronger foundation for parallelism than jq's backtracking VM — transducers compose without intermediate allocations and have clear data-flow boundaries.
 
@@ -37,7 +37,7 @@ Three tiers, ranked by impact vs. effort.
 
 When input is a materialized ~Array~ and operation is a transducible function (~where~, ~map~, ~flatten~, ~unique~):
 
-#+begin_src jx
+#+begin_src jbq
 [1M items] | where .price > 100 | map {name, price}
 #+end_src
 
@@ -93,7 +93,7 @@ Handler runs transducer pipeline on each emitted value. No intermediate tree. Su
 
 Parallelizing independent branches of a pipeline:
 
-#+begin_src jx
+#+begin_src jbq
 {slow: (. | expensive_op), fast: (. | cheap_op)}
 #+end_src
 
@@ -105,7 +105,7 @@ Could evaluate both branches in parallel. But jq queries are typically linear pi
 |--------------+-----------------------------------------------+-------------------------------------------|
 | *Domains*    | OS-level parallelism (true multi-core)        | Tak — array partitioning                  |
 | *Effects*    | Algebraic effects (cooperative, single-domain) | Maybe — streaming parser                  |
-| *Eio*        | Effect-based I/O library                      | Ni — jx is CPU-bound, not I/O-bound       |
+| *Eio*        | Effect-based I/O library                      | Ni — jbq is CPU-bound, not I/O-bound       |
 | *Domainslib* | Task pools, parallel-for, futures             | Tak — cleaner than raw Domain.spawn       |
 
 *Domains* are the main tool. ~Domain.spawn~ gives real parallel execution. *Domainslib* gives ~Task.parallel_for~ which is exactly what array partitioning needs.

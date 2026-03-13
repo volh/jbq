@@ -1,4 +1,4 @@
-#+TITLE: jx — A Better Query Language for JSON
+#+TITLE: jbq — A Better Query Language for JSON
 #+AUTHOR: Roman Sever
 #+DATE: 2026-03-09
 
@@ -8,13 +8,13 @@ A jq replacement with a genuinely better query language. Not "jq in Rust" — a
 new language that's readable, concise, and unambiguous.
 
 Every existing "better jq" (jaq, gojq, fq, query-json) kept jq's syntax and
-competed on runtime performance. jx competes on *language design*.
+competed on runtime performance. jbq competes on *language design*.
 
 #+begin_src bash
 # jq
 .items[] | select(.price > 100) | {name, display: (.name | ascii_downcase | .[0:20])}
 
-# jx
+# jbq
 items | where .price > 100 | map {name, display: .name | lower | truncate 20}
 #+end_src
 
@@ -181,7 +181,7 @@ items | map (x => {name: x.name, total: x.price * x.qty})
 * Architecture
 
 #+begin_src
-jx 'items | where .price > 100 | map {name, price}' data.json
+jbq 'items | where .price > 100 | map {name, price}' data.json
 
   ┌────────┐    ┌────────┐    ┌─────┐    ┌─────────────┐    ┌────────┐
   │ Lexer  │ -> │ Parser │ -> │ AST │ -> │ Interpreter │ -> │ Output │
@@ -192,7 +192,7 @@ jx 'items | where .price > 100 | map {name, price}' data.json
 
 ** Project Structure
 #+begin_src
-jx/
+jbq/
 ├── bin/
 │   ├── main.ml               # CLI entry (cmdliner)
 │   └── dune
@@ -211,7 +211,7 @@ jx/
 │   ├── test_interpreter.ml
 │   └── dune
 ├── dune-project
-├── jx.opam
+├── jbq.opam
 ├── Makefile
 └── PLAN.org
 #+end_src
@@ -221,7 +221,7 @@ jx/
 ** Phase 1: Skeleton [0/3]
 - [ ] dune project, cmdliner CLI, yojson for JSON parsing
 - [ ] Read stdin or file, parse JSON, print it back
-- [ ] =jx '.' file.json= works (identity)
+- [ ] =jbq '.' file.json= works (identity)
 
 ** Phase 2: Lexer + Parser + AST [0/4]
 - [ ] Token types: dot, pipe, ident, int, float, string, brackets, braces, operators

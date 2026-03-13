@@ -45,13 +45,38 @@ let value_mem v vs =
       | _ -> false)
     vs
 
+type enum_key =
+  | EKNull
+  | EKBool of bool
+  | EKInt of int
+  | EKBigInt of string
+  | EKFloat of int64
+  | EKString of string
+
+let enum_key_of_value = function
+  | Value.Null -> EKNull
+  | Value.Bool b -> EKBool b
+  | Value.Int i -> EKInt i
+  | Value.BigInt z -> EKBigInt (Z.to_string z)
+  | Value.Float f -> EKFloat (Int64.bits_of_float f)
+  | Value.String s -> EKString s
+  | _ -> invalid_arg "enum_key_of_value expects scalar value"
+
 let merge_values vs1 vs2 =
-  let combined =
-    List.fold_left
-      (fun acc v -> if value_mem v acc then acc else acc @ [ v ])
-      vs1 vs2
+  let seen = Hashtbl.create (List.length vs1 + List.length vs2) in
+  let rev_values = ref [] in
+  let count = ref 0 in
+  let add v =
+    if !count <= enum_threshold then
+      let key = enum_key_of_value v in
+      if not (Hashtbl.mem seen key) then (
+        Hashtbl.add seen key ();
+        incr count;
+        rev_values := v :: !rev_values)
   in
-  if List.length combined > enum_threshold then None else Some combined
+  List.iter add vs1;
+  List.iter add vs2;
+  if !count > enum_threshold then None else Some (List.rev !rev_values)
 
 let rec merge a b =
   match (a, b) with
@@ -81,6 +106,20 @@ let rec merge a b =
   | a, b -> SOneOf [ a; b ]
 
 and merge_objects oa ob =
+  let property_table properties =
+    let tbl = Hashtbl.create (List.length properties) in
+    List.iter (fun (k, v) -> Hashtbl.replace tbl k v) properties;
+    tbl
+  in
+  let string_set values =
+    let tbl = Hashtbl.create (List.length values) in
+    List.iter (fun v -> Hashtbl.replace tbl v ()) values;
+    tbl
+  in
+  let props_a = property_table oa.properties in
+  let props_b = property_table ob.properties in
+  let req_a = string_set oa.required in
+  let req_b = string_set ob.required in
   let all_keys =
     let ka = List.map fst oa.properties in
     let kb = List.map fst ob.properties in
@@ -97,8 +136,8 @@ and merge_objects oa ob =
   let properties =
     List.map
       (fun k ->
-        let sa = List.assoc_opt k oa.properties in
-        let sb = List.assoc_opt k ob.properties in
+        let sa = Hashtbl.find_opt props_a k in
+        let sb = Hashtbl.find_opt props_b k in
         let schema =
           match (sa, sb) with
           | Some a, Some b -> merge a b
@@ -112,9 +151,9 @@ and merge_objects oa ob =
   let required =
     List.filter
       (fun k ->
-        List.mem k oa.required && List.mem k ob.required
-        && List.mem_assoc k oa.properties
-        && List.mem_assoc k ob.properties)
+        Hashtbl.mem req_a k && Hashtbl.mem req_b k
+        && Hashtbl.mem props_a k
+        && Hashtbl.mem props_b k)
       all_keys
   in
   { properties; required; count = oa.count + ob.count }

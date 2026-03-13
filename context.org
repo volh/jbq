@@ -1,20 +1,20 @@
-#+TITLE: jx — Implementation Context
+#+TITLE: jbq — Implementation Context
 #+AUTHOR: Roman Sever
 #+DATE: 2026-03-09
 #+STARTUP: overview
 
 * Project Overview
 
-jx is a jq replacement with a genuinely better query language. Written in
+jbq is a jq replacement with a genuinely better query language. Written in
 OCaml, with a native simdjson-based JSON input path and an internal lazy
 sequence/transducer runtime.
 
 Every existing "better jq" (jaq, gojq, fq, query-json) kept jq's syntax and
-competed on runtime. jx competes on language design *and* now has a native
+competed on runtime. jbq competes on language design *and* now has a native
 input path that materially changes the performance profile.
 
 ** Repository
-=~/dev/sandbox/jx/=
+=~/dev/sandbox/jbq/=
 
 ** Status
 Working prototype. 82/82 tests passing. CLI functional.
@@ -34,7 +34,7 @@ Current parser/runtime state:
 * Architecture
 
 #+begin_src
-jx 'items | where .price > 100 | map {name, price}' data.json
+jbq 'items | where .price > 100 | map {name, price}' data.json
 
   ┌────────────┐    ┌────────┐    ┌─────┐    ┌─────────────┐    ┌────────┐
   │ simdjson   │ -> │ Parser │ -> │ AST │ -> │ Interpreter │ -> │ Output │
@@ -95,7 +95,7 @@ The old Yojson input path is no longer used in active code.
 | lib/simdjson_stream.ml|    20 | Lazy sequence bridge for top arrays     |
 | lib/simdjson_stubs.cpp|   457 | simdjson binding + native =Value.t= build |
 | bin/main.ml           |   115 | CLI entrypoint and profiling            |
-| test/test_jx.ml       |   589 | End-to-end regression suite             |
+| test/test_jbq.ml      |   589 | End-to-end regression suite             |
 | bench/bench_lazy.ml   |   158 | Lazy/transducer benchmark               |
 
 * Runtime Model
@@ -130,7 +130,7 @@ preserved exactly instead of degrading to float.
 - huge integer literals stay exact
 - huge integer equality/ordering stays exact
 
-This is strictly better than the previous jx behavior and better than jq on
+This is strictly better than the previous jbq behavior and better than jq on
 large integer arithmetic.
 
 ** Transducer Pipeline
@@ -145,15 +145,15 @@ without materializing an intermediate array.
 * Performance Snapshot
 
 Numbers below are from the current =main= tree on 2026-03-09, comparing jq
-1.8.1 with the native simdjson jx path.
+1.8.1 with the native simdjson jbq path.
 
 ** xlarge.json (100K items)
 
-| Query                          | jq       | jx       | Result                         |
+| Query                          | jq       | jbq      | Result                         |
 |--------------------------------+----------+----------+--------------------------------|
-| =where .price > 400 | take 5=  | ~234.2ms | ~19.1ms  | jx ~12.3x faster               |
-| =count=                        | ~233.3ms | ~70.3ms  | jx ~3.3x faster                |
-| =map .price | sum=             | ~315.1ms | ~82.8ms  | jx ~3.8x faster                |
+| =where .price > 400 | take 5=  | ~234.2ms | ~19.1ms  | jbq ~12.3x faster               |
+| =count=                        | ~233.3ms | ~70.3ms  | jbq ~3.3x faster                |
+| =map .price | sum=             | ~315.1ms | ~82.8ms  | jbq ~3.8x faster                |
 | =.=                            | ~490.5ms | ~493.9ms | near parity, jq still ~1% ahead |
 
 ** Interpretation
@@ -229,7 +229,7 @@ make test
 echo '{"name":"Alice"}' | dune exec bin/main.exe -- '.name'
 
 # profile
-JX_PROFILE=1 ./_build/default/bin/main.exe 'count' bench/data/xlarge.json > /dev/null
+JBQ_PROFILE=1 ./_build/default/bin/main.exe 'count' bench/data/xlarge.json > /dev/null
 #+end_src
 
 * Merge Notes

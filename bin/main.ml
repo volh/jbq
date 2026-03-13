@@ -1,8 +1,8 @@
 let () =
-  Jx.Interpreter.dispatch_ref := Jx.Stdlib_fns.dispatch;
-  Jx.Value.xd_run_ref := Jx.Transducer.run
+  Jbq.Interpreter.dispatch_ref := Jbq.Stdlib_fns.dispatch;
+  Jbq.Value.xd_run_ref := Jbq.Transducer.run
 
-let profile = match Sys.getenv_opt "JX_PROFILE" with Some "1" -> true | _ -> false
+let profile = match Sys.getenv_opt "JBQ_PROFILE" with Some "1" -> true | _ -> false
 
 let time label f =
   if profile then (
@@ -20,7 +20,7 @@ let streamable_root_fn = function
     true
   | _ -> false
 
-let rec supports_simdjson_top_array_path (expr : Jx.Ast.expr) =
+let rec supports_simdjson_top_array_path (expr : Jbq.Ast.expr) =
   match expr with
   | Identity -> true
   | FnCall { name; _ } -> streamable_root_fn name
@@ -31,12 +31,12 @@ let rec supports_simdjson_top_array_path (expr : Jx.Ast.expr) =
 
 let run query input_file file_opt raw_output compact schema sample no_const no_enum =
   let resolved =
-    match Jx.Cli_args.resolve ~query ~input_file ~input_opt:file_opt ~schema with
+    match Jbq.Cli_args.resolve ~query ~input_file ~input_opt:file_opt ~schema with
     | Ok resolved -> resolved
-    | Error Jx.Cli_args.Missing_query ->
+    | Error Jbq.Cli_args.Missing_query ->
       Printf.eprintf "error: QUERY argument is required\n";
       exit 1
-    | Error (Jx.Cli_args.Duplicate_input (a, b)) ->
+    | Error (Jbq.Cli_args.Duplicate_input (a, b)) ->
       Printf.eprintf
         "error: input file provided twice (%s and %s); use FILE or --file, not both\n"
         a b;
@@ -45,7 +45,7 @@ let run query input_file file_opt raw_output compact schema sample no_const no_e
   let query_str = resolved.query in
   let input_source = resolved.input_source in
   try
-    let ast = time "parse query" (fun () -> Jx.Parser.parse query_str) in
+    let ast = time "parse query" (fun () -> Jbq.Parser.parse query_str) in
     let json_str =
       time "read file" (fun () ->
         match input_source with
@@ -69,26 +69,26 @@ let run query input_file file_opt raw_output compact schema sample no_const no_e
       if supports_simdjson_top_array_path ast then
         try
           time "simdjson top-array init" (fun () ->
-            Jx.Simdjson_stream.top_array_input json_str)
+            Jbq.Simdjson_stream.top_array_input json_str)
         with Failure _ ->
-          time "simdjson parse" (fun () -> Jx.Simdjson_native.parse_value json_str)
+          time "simdjson parse" (fun () -> Jbq.Simdjson_native.parse_value json_str)
       else
-        time "simdjson parse" (fun () -> Jx.Simdjson_native.parse_value json_str)
+        time "simdjson parse" (fun () -> Jbq.Simdjson_native.parse_value json_str)
     in
-    let result = time "eval pipeline" (fun () -> Jx.Interpreter.eval [] input ast) in
+    let result = time "eval pipeline" (fun () -> Jbq.Interpreter.eval [] input ast) in
     if schema then (
       let s =
         time "infer schema" (fun () ->
-          if sample > 0 then Jx.Schema.infer_sampled ~n:sample result
-          else Jx.Schema.infer result)
+          if sample > 0 then Jbq.Schema.infer_sampled ~n:sample result
+          else Jbq.Schema.infer result)
       in
-      let s = if no_const then Jx.Schema.strip_const s else s in
-      let s = if no_enum then Jx.Schema.strip_enum s else s in
+      let s = if no_const then Jbq.Schema.strip_const s else s in
+      let s = if no_enum then Jbq.Schema.strip_enum s else s in
       let schema_val =
-        Jx.Schema.to_value s |> Jx.Schema.dedup |> Jx.Schema.add_schema_id
+        Jbq.Schema.to_value s |> Jbq.Schema.dedup |> Jbq.Schema.add_schema_id
       in
       let output =
-        time "output" (fun () -> Jx.Printer.to_json ~compact schema_val)
+        time "output" (fun () -> Jbq.Printer.to_json ~compact schema_val)
       in
       time "print" (fun () ->
         print_string output;
@@ -98,16 +98,16 @@ let run query input_file file_opt raw_output compact schema sample no_const no_e
       let output =
         time "output" (fun () ->
           match (raw_output, result) with
-          | true, Jx.Value.String s -> s
-          | _ -> Jx.Printer.to_json ~compact result)
+          | true, Jbq.Value.String s -> s
+          | _ -> Jbq.Printer.to_json ~compact result)
       in
       time "print" (fun () ->
         print_string output;
         print_newline ());
       0
   with
-  | Jx.Error.Jx_error err ->
-    Printf.eprintf "%s%!" (Jx.Error.format_error err query_str);
+  | Jbq.Error.Jbq_error err ->
+    Printf.eprintf "%s%!" (Jbq.Error.format_error err query_str);
     1
   | Failure msg ->
     let prefix = "json: " in
@@ -124,7 +124,7 @@ let run query input_file file_opt raw_output compact schema sample no_const no_e
 open Cmdliner
 
 let query =
-  let doc = "The jx query expression. Defaults to identity (.) when --schema is used." in
+  let doc = "The jbq query expression. Defaults to identity (.) when --schema is used." in
   Arg.(value & pos 0 (some string) None & info [] ~docv:"QUERY" ~doc)
 
 let input_file =
@@ -165,7 +165,7 @@ let no_enum =
 
 let cmd =
   let doc = "A better query language for JSON" in
-  let info = Cmd.info "jx" ~version:"0.1.0" ~doc in
+  let info = Cmd.info "jbq" ~version:"0.1.0" ~doc in
   Cmd.v info
     Term.(const run $ query $ input_file $ file_opt $ raw_output $ compact $ schema $ sample $ no_const $ no_enum)
 

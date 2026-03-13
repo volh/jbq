@@ -1,42 +1,48 @@
 let () =
-  Jx.Interpreter.dispatch_ref := Jx.Stdlib_fns.dispatch;
-  Jx.Value.xd_run_ref := Jx.Transducer.run
+  Jbq.Interpreter.dispatch_ref := Jbq.Stdlib_fns.dispatch;
+  Jbq.Value.xd_run_ref := Jbq.Transducer.run
 
 let eval_str query json_str =
-  let input = Jx.Simdjson_native.parse_value json_str in
-  let ast = Jx.Parser.parse query in
-  let result = Jx.Interpreter.eval [] input ast in
-  Jx.Printer.to_json ~compact:true result
+  let input = Jbq.Simdjson_native.parse_value json_str in
+  let ast = Jbq.Parser.parse query in
+  let result = Jbq.Interpreter.eval [] input ast in
+  Jbq.Printer.to_json ~compact:true result
 
 let eval_pretty_str query json_str =
-  let input = Jx.Simdjson_native.parse_value json_str in
-  let ast = Jx.Parser.parse query in
-  let result = Jx.Interpreter.eval [] input ast in
-  Jx.Printer.to_json result
+  let input = Jbq.Simdjson_native.parse_value json_str in
+  let ast = Jbq.Parser.parse query in
+  let result = Jbq.Interpreter.eval [] input ast in
+  Jbq.Printer.to_json result
 
 let eval_stream_str query json_str =
-  let input = Jx.Simdjson_stream.top_array_input json_str in
-  let ast = Jx.Parser.parse query in
-  let result = Jx.Interpreter.eval [] input ast in
-  Jx.Printer.to_json ~compact:true result
+  let input = Jbq.Simdjson_stream.top_array_input json_str in
+  let ast = Jbq.Parser.parse query in
+  let result = Jbq.Interpreter.eval [] input ast in
+  Jbq.Printer.to_json ~compact:true result
 
 let eval_error_kind query json_str =
   try
     ignore (eval_str query json_str);
     None
-  with Jx.Error.Jx_error err -> Some err.kind
+  with Jbq.Error.Jbq_error err -> Some err.kind
+
+let printer_error_kind value =
+  try
+    ignore (Jbq.Printer.to_json ~compact:true value);
+    None
+  with Jbq.Error.Jbq_error err -> Some err.kind
 
 let test_cli_args_resolve_missing_query () =
   Alcotest.(check bool) "missing query rejected" true
-    (match Jx.Cli_args.resolve ~query:None ~input_file:None ~input_opt:None ~schema:false with
-     | Error Jx.Cli_args.Missing_query -> true
+    (match Jbq.Cli_args.resolve ~query:None ~input_file:None ~input_opt:None ~schema:false with
+     | Error Jbq.Cli_args.Missing_query -> true
      | _ -> false)
 
 let test_cli_args_resolve_schema_file_flag () =
   Alcotest.(check (option string)) "schema file flag becomes input source"
     (Some "data.json")
     (match
-       Jx.Cli_args.resolve ~query:None ~input_file:None
+       Jbq.Cli_args.resolve ~query:None ~input_file:None
          ~input_opt:(Some "data.json") ~schema:true
      with
     | Ok resolved -> resolved.input_source
@@ -45,47 +51,47 @@ let test_cli_args_resolve_schema_file_flag () =
 let test_cli_args_resolve_duplicate_input () =
   Alcotest.(check bool) "duplicate input rejected" true
     (match
-       Jx.Cli_args.resolve ~query:(Some ".") ~input_file:(Some "a.json")
+       Jbq.Cli_args.resolve ~query:(Some ".") ~input_file:(Some "a.json")
          ~input_opt:(Some "b.json") ~schema:true
      with
-    | Error (Jx.Cli_args.Duplicate_input ("a.json", "b.json")) -> true
+    | Error (Jbq.Cli_args.Duplicate_input ("a.json", "b.json")) -> true
     | _ -> false)
 
 let test_cli_args_resolve_query_stays_query () =
   Alcotest.(check string) "positional token stays query"
     "./users.json"
     (match
-       Jx.Cli_args.resolve ~query:(Some "./users.json") ~input_file:None
+       Jbq.Cli_args.resolve ~query:(Some "./users.json") ~input_file:None
          ~input_opt:None ~schema:true
      with
     | Ok resolved -> resolved.query
     | Error _ -> "")
 
 let test_simdjson_available () =
-  Alcotest.(check bool) "simdjson available" true (Jx.Simdjson_native.available ())
+  Alcotest.(check bool) "simdjson available" true (Jbq.Simdjson_native.available ())
 
 let test_simdjson_version () =
   Alcotest.(check bool) "simdjson version non-empty" true
-    (String.length (Jx.Simdjson_native.version ()) > 0)
+    (String.length (Jbq.Simdjson_native.version ()) > 0)
 
 let test_simdjson_top_array_elements_raw () =
   Alcotest.(check (list string))
     "top array raw elements"
     [ {|{"a":1}|}; {|[2,3]|}; {|4|} ]
-    (Jx.Simdjson_native.top_array_elements_raw {|[{"a":1},[2,3],4]|})
+    (Jbq.Simdjson_native.top_array_elements_raw {|[{"a":1},[2,3],4]|})
 
 let test_simdjson_top_array_rejects_non_array () =
   Alcotest.(check bool) "top array rejects non-array" true
     (try
-       ignore (Jx.Simdjson_native.top_array_elements_raw {|{"a":1}|});
+       ignore (Jbq.Simdjson_native.top_array_elements_raw {|{"a":1}|});
        false
      with Failure _ -> true)
 
 let test_simdjson_top_array_value_seq () =
   let values =
-    Jx.Simdjson_stream.top_array_value_seq {|[{"a":1},[2,3],4]|}
+    Jbq.Simdjson_stream.top_array_value_seq {|[{"a":1},[2,3],4]|}
     |> List.of_seq
-    |> List.map (Jx.Printer.to_json ~compact:true)
+    |> List.map (Jbq.Printer.to_json ~compact:true)
   in
   Alcotest.(check (list string))
     "top array value seq"
@@ -96,9 +102,9 @@ let test_simdjson_parse_value () =
   Alcotest.(check string)
     "parse value nested"
     {|{"a":[1,2,{"b":true}],"c":null,"d":"x"}|}
-    (Jx.Simdjson_native.parse_value
+    (Jbq.Simdjson_native.parse_value
        {|{"a":[1,2,{"b":true}],"c":null,"d":"x"}|}
-    |> Jx.Printer.to_json ~compact:true)
+    |> Jbq.Printer.to_json ~compact:true)
 
 let test_simdjson_stream_where_take () =
   Alcotest.(check string)
@@ -376,7 +382,7 @@ let test_unicode_and_escaped_keys () =
 let test_malformed_json_errors () =
   Alcotest.(check bool) "malformed json errors" true
     (try
-       ignore (Jx.Simdjson_native.parse_value {|{"a":|});
+       ignore (Jbq.Simdjson_native.parse_value {|{"a":|});
        false
      with Failure _ -> true)
 
@@ -397,7 +403,7 @@ let test_strict_null () =
     (try
        ignore (eval_str ".missing" {|{"name": "Alice"}|});
        false
-     with Jx.Error.Jx_error _ -> true)
+     with Jbq.Error.Jbq_error _ -> true)
 
 let test_range () =
   Alcotest.(check string) "range" "[0,1,2,3,4]" (eval_str "range 5" "null")
@@ -408,6 +414,12 @@ let test_group_by () =
     {|{"a":[{"t":"a","v":1},{"t":"a","v":2}],"b":[{"t":"b","v":3}]}|}
     (eval_str "group_by .t"
        {|[{"t":"a","v":1},{"t":"b","v":3},{"t":"a","v":2}]|})
+
+let test_group_by_key_collision () =
+  Alcotest.(check bool) "group_by rejects ambiguous labels" true
+    (match eval_error_kind "group_by ." {|[1,"1"]|} with
+    | Some Jbq.Error.Runtime_error -> true
+    | _ -> false)
 
 let test_pick_space_separated_args () =
   Alcotest.(check string)
@@ -422,6 +434,18 @@ let test_pick_semicolon_args () =
     {|{"name":"Alice","email":"a@b.com"}|}
     (eval_str "pick .name; .email"
        {|{"name":"Alice","email":"a@b.com","age":30}|})
+
+let test_pick_requires_object () =
+  Alcotest.(check bool) "pick rejects non-object input" true
+    (match eval_error_kind "pick .name" {|"Alice"|} with
+    | Some Jbq.Error.Type_mismatch -> true
+    | _ -> false)
+
+let test_omit_requires_object () =
+  Alcotest.(check bool) "omit rejects non-object input" true
+    (match eval_error_kind "omit .name" "null" with
+    | Some Jbq.Error.Type_mismatch -> true
+    | _ -> false)
 
 let test_get_nested_path () =
   Alcotest.(check string)
@@ -443,7 +467,7 @@ let test_get_stays_exact () =
        eval_error_kind "get .orders.items.name"
          {|{"orders":[{"items":[{"name":"W"}]}]}|}
      with
-    | Some Jx.Error.Type_mismatch -> true
+    | Some Jbq.Error.Type_mismatch -> true
     | _ -> false)
 
 let test_has_nested_true () =
@@ -484,7 +508,7 @@ let test_spaced_postfix_rejected () =
     (try
        ignore (eval_str ".items [0]" {|{"items":[1,2,3]}|});
        false
-     with Jx.Error.Jx_error _ -> true)
+     with Jbq.Error.Jbq_error _ -> true)
 
 let test_avg () =
   let result = eval_str "avg" "[1,2,3,4,5]" in
@@ -513,6 +537,30 @@ let test_truncate () =
     "truncate" "\"hel\""
     (eval_str ".name | truncate 3" {|{"name": "hello"}|})
 
+let test_split_multichar_separator () =
+  Alcotest.(check string)
+    "split supports substring separator"
+    {|["a","b","c"]|}
+    (eval_str {|"a::b::c" | split "::"|} "null")
+
+let test_split_empty_separator_error () =
+  Alcotest.(check bool) "split rejects empty separator" true
+    (match eval_error_kind {| "abc" | split "" |} "null" with
+    | Some Jbq.Error.Runtime_error -> true
+    | _ -> false)
+
+let test_printer_rejects_nan () =
+  Alcotest.(check bool) "printer rejects NaN" true
+    (match printer_error_kind (Jbq.Value.Float (0.0 /. 0.0)) with
+    | Some Jbq.Error.Runtime_error -> true
+    | _ -> false)
+
+let test_printer_rejects_infinity () =
+  Alcotest.(check bool) "printer rejects Infinity" true
+    (match printer_error_kind (Jbq.Value.Float (1.0 /. 0.0)) with
+    | Some Jbq.Error.Runtime_error -> true
+    | _ -> false)
+
 let test_array_index () =
   Alcotest.(check string) "array index" "2" (eval_str ".[1]" "[1,2,3]")
 
@@ -523,6 +571,24 @@ let test_negative_index () =
 
 let test_slice () =
   Alcotest.(check string) "slice" "[2,3]" (eval_str ".[1:3]" "[1,2,3,4]")
+
+let test_index_let_binding () =
+  Alcotest.(check string)
+    "index sees let binding"
+    "20"
+    (eval_str "let i = 1 in .[i]" "[10,20,30]")
+
+let test_slice_let_binding () =
+  Alcotest.(check string)
+    "slice sees let binding"
+    "[2,3]"
+    (eval_str "let start = 1 in .[start:3]" "[1,2,3,4]")
+
+let test_string_slice_out_of_range () =
+  Alcotest.(check string)
+    "string slice clamps oversized start"
+    "\"\""
+    (eval_str ".[99:]" {|"hello"|})
 
 (* === Lazy sequence tests === *)
 
@@ -628,29 +694,29 @@ let test_lazy_no_realization () =
 (* === Schema inference tests === *)
 
 let schema_of input =
-  let s = Jx.Schema.infer input in
-  Jx.Printer.to_json ~compact:true (Jx.Schema.to_value s)
+  let s = Jbq.Schema.infer input in
+  Jbq.Printer.to_json ~compact:true (Jbq.Schema.to_value s)
 
 let schema_str json_str =
-  schema_of (Jx.Simdjson_native.parse_value json_str)
+  schema_of (Jbq.Simdjson_native.parse_value json_str)
 
 let schema_query_str query json_str =
-  let input = Jx.Simdjson_native.parse_value json_str in
-  let ast = Jx.Parser.parse query in
-  let result = Jx.Interpreter.eval [] input ast in
+  let input = Jbq.Simdjson_native.parse_value json_str in
+  let ast = Jbq.Parser.parse query in
+  let result = Jbq.Interpreter.eval [] input ast in
   schema_of result
 
 let schema_sampled_query_str ~n query json_str =
-  let input = Jx.Simdjson_native.parse_value json_str in
-  let ast = Jx.Parser.parse query in
-  let result = Jx.Interpreter.eval [] input ast in
-  let s = Jx.Schema.infer_sampled ~n result in
-  Jx.Printer.to_json ~compact:true (Jx.Schema.to_value s)
+  let input = Jbq.Simdjson_native.parse_value json_str in
+  let ast = Jbq.Parser.parse query in
+  let result = Jbq.Interpreter.eval [] input ast in
+  let s = Jbq.Schema.infer_sampled ~n result in
+  Jbq.Printer.to_json ~compact:true (Jbq.Schema.to_value s)
 
 let schema_sampled_str ~n json_str =
-  let input = Jx.Simdjson_native.parse_value json_str in
-  let s = Jx.Schema.infer_sampled ~n input in
-  Jx.Printer.to_json ~compact:true (Jx.Schema.to_value s)
+  let input = Jbq.Simdjson_native.parse_value json_str in
+  let s = Jbq.Schema.infer_sampled ~n input in
+  Jbq.Printer.to_json ~compact:true (Jbq.Schema.to_value s)
 
 let contains_substring s sub =
   let slen = String.length s and sublen = String.length sub in
@@ -965,7 +1031,7 @@ let test_schema_oneof_base_subsumes_enum () =
   Alcotest.(check bool) "no string enum when bare string exists" false has_string_enum
 
 let () =
-  Alcotest.run "jx"
+  Alcotest.run "jbq"
     [
       ( "simdjson",
         [
@@ -1016,6 +1082,9 @@ let () =
           Alcotest.test_case "array index" `Quick test_array_index;
           Alcotest.test_case "negative index" `Quick test_negative_index;
           Alcotest.test_case "slice" `Quick test_slice;
+          Alcotest.test_case "index sees let binding" `Quick test_index_let_binding;
+          Alcotest.test_case "slice sees let binding" `Quick test_slice_let_binding;
+          Alcotest.test_case "string slice clamps start" `Quick test_string_slice_out_of_range;
           Alcotest.test_case "bigint parse exact" `Quick test_bigint_parse_exact;
           Alcotest.test_case "huge bigint parse exact" `Quick test_huge_bigint_parse_exact;
           Alcotest.test_case "negative bigint parse exact" `Quick test_negative_bigint_parse_exact;
@@ -1036,8 +1105,11 @@ let () =
           Alcotest.test_case "where | map" `Quick test_where_map_pipe;
           Alcotest.test_case "sort_by" `Quick test_sort_by;
           Alcotest.test_case "group_by" `Quick test_group_by;
+          Alcotest.test_case "group_by key collision" `Quick test_group_by_key_collision;
           Alcotest.test_case "pick spaced args" `Quick test_pick_space_separated_args;
           Alcotest.test_case "pick semicolon args" `Quick test_pick_semicolon_args;
+          Alcotest.test_case "pick requires object" `Quick test_pick_requires_object;
+          Alcotest.test_case "omit requires object" `Quick test_omit_requires_object;
           Alcotest.test_case "get nested path" `Quick test_get_nested_path;
           Alcotest.test_case "get indexed path" `Quick test_get_indexed_path;
           Alcotest.test_case "get stays exact" `Quick test_get_stays_exact;
@@ -1068,9 +1140,13 @@ let () =
       ( "strings",
         [
           Alcotest.test_case "truncate" `Quick test_truncate;
+          Alcotest.test_case "split multichar separator" `Quick test_split_multichar_separator;
+          Alcotest.test_case "split empty separator" `Quick test_split_empty_separator_error;
           Alcotest.test_case "interpolation" `Quick test_interpolation;
           Alcotest.test_case "interpolation expr" `Quick test_interpolation_expr;
           Alcotest.test_case "plain string" `Quick test_plain_string;
+          Alcotest.test_case "printer rejects NaN" `Quick test_printer_rejects_nan;
+          Alcotest.test_case "printer rejects Infinity" `Quick test_printer_rejects_infinity;
         ] );
       ( "null handling",
         [

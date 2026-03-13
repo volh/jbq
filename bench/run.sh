@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Benchmark jx vs jq vs query-json using hyperfine
+# Benchmark jbq vs jq vs query-json using hyperfine
 set -euo pipefail
 
 BENCH_DIR="$(cd "$(dirname "$0")" && pwd)"
 DATA_DIR="$BENCH_DIR/data"
-JX="${BENCH_DIR}/../_build/default/bin/main.exe"
+JBQ="${BENCH_DIR}/../_build/default/bin/main.exe"
 JQ="jq"
 QJ="query-json"
 
@@ -23,10 +23,10 @@ fi
 
 echo ""
 echo "==================================="
-echo "  jx vs jq vs query-json benchmark"
+echo "  jbq vs jq vs query-json benchmark"
 echo "==================================="
 echo ""
-echo "jx version:         $($JX --version 2>/dev/null || echo '0.1.0')"
+echo "jbq version:        $($JBQ --version 2>/dev/null || echo '0.1.0')"
 echo "jq version:         $(jq --version)"
 echo "query-json version: $(query-json --version 2>&1)"
 echo "hyperfine:          $(hyperfine --version)"
@@ -36,14 +36,14 @@ echo ""
 run() {
     local desc="$1"
     local data="$2"
-    local jx_query="$3"
+    local jbq_query="$3"
     local jq_query="$4"
     local qj_query="${5:-$jq_query}"
 
     echo "### $desc"
     echo ""
 
-    local jx_cmd="$JX '$jx_query' '$data'"
+    local jbq_cmd="$JBQ '$jbq_query' '$data'"
     local jq_cmd="$JQ '$jq_query' '$data'"
     local qj_cmd="$QJ '$qj_query' '$data'"
 
@@ -53,13 +53,13 @@ run() {
 
     if $qj_ok; then
         hyperfine --warmup "$WARMUP" --min-runs "$MIN_RUNS" -N \
-            --command-name "jx" "$jx_cmd" \
+            --command-name "jbq" "$jbq_cmd" \
             --command-name "jq" "$jq_cmd" \
             --command-name "qj" "$qj_cmd"
     else
         echo "(query-json: unsupported query, skipping)"
         hyperfine --warmup "$WARMUP" --min-runs "$MIN_RUNS" -N \
-            --command-name "jx" "$jx_cmd" \
+            --command-name "jbq" "$jbq_cmd" \
             --command-name "jq" "$jq_cmd"
     fi
     echo ""

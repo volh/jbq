@@ -1,22 +1,22 @@
 let () =
-  Callback.register "jx_simdjson_object_of_fields" Value.object_of_fields;
-  Callback.register "jx_simdjson_bigint_value_of_string"
+  Callback.register "jbq_simdjson_object_of_fields" Value.object_of_fields;
+  Callback.register "jbq_simdjson_bigint_value_of_string"
     (fun s -> Value.of_z (Z.of_string s))
 
 type top_array_stream
 
-external available : unit -> bool = "jx_simdjson_available"
-external version : unit -> string = "jx_simdjson_version"
-external parse_value : string -> Value.t = "jx_simdjson_parse_value"
+external available : unit -> bool = "jbq_simdjson_available"
+external version : unit -> string = "jbq_simdjson_version"
+external parse_value : string -> Value.t = "jbq_simdjson_parse_value"
 
 external top_array_stream_create_raw : string -> top_array_stream
-  = "jx_simdjson_top_array_stream_create"
+  = "jbq_simdjson_top_array_stream_create"
 
 external top_array_stream_next_raw : top_array_stream -> string option
-  = "jx_simdjson_top_array_stream_next_raw"
+  = "jbq_simdjson_top_array_stream_next_raw"
 
 external top_array_stream_next_value : top_array_stream -> Value.t option
-  = "jx_simdjson_top_array_stream_next_value"
+  = "jbq_simdjson_top_array_stream_next_value"
 
 let top_array_stream_create json = top_array_stream_create_raw json
 

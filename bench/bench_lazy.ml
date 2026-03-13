@@ -1,19 +1,19 @@
 let () =
-  Jx.Interpreter.dispatch_ref := Jx.Stdlib_fns.dispatch;
-  Jx.Value.xd_run_ref := Jx.Transducer.run
+  Jbq.Interpreter.dispatch_ref := Jbq.Stdlib_fns.dispatch;
+  Jbq.Value.xd_run_ref := Jbq.Transducer.run
 
 let run query json_str =
-  let input = Jx.Simdjson_native.parse_value json_str in
-  let ast = Jx.Parser.parse query in
-  Jx.Interpreter.eval [] input ast
+  let input = Jbq.Simdjson_native.parse_value json_str in
+  let ast = Jbq.Parser.parse query in
+  Jbq.Interpreter.eval [] input ast
 
 let run_null query = run query "null"
 
 let run_preparse query input =
-  let ast = Jx.Parser.parse query in
-  Jx.Interpreter.eval [] input ast
+  let ast = Jbq.Parser.parse query in
+  Jbq.Interpreter.eval [] input ast
 
-let preparse json_str = Jx.Simdjson_native.parse_value json_str
+let preparse json_str = Jbq.Simdjson_native.parse_value json_str
 
 let time_it label f =
   Gc.compact ();
@@ -46,7 +46,7 @@ let big_array n =
 let () =
   Printf.printf "\n";
   Printf.printf "==========================================================\n";
-  Printf.printf "  jx Lazy Sequence Benchmark\n";
+  Printf.printf "  jbq Lazy Sequence Benchmark\n";
   Printf.printf "==========================================================\n";
 
   (* --- Test 1: Proof that infinite sequences work --- *)

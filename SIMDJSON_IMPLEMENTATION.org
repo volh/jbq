@@ -3,9 +3,9 @@
 
 * Goal
 
-- [ ] Build a real native simdjson binding inside =jx= on branch
+- [ ] Build a real native simdjson binding inside =jbq= on branch
   =simdjson-spike=.
-- [ ] Make the first useful milestone align with jx's transducer model:
+- [ ] Make the first useful milestone align with jbq's transducer model:
   top-level array iteration.
 - [ ] Keep this as a spike until we prove:
   - the binding compiles cleanly with dune
@@ -46,7 +46,7 @@
 * Why This Shape
 
 - [ ] simdjson is strongest as a fast incremental parser.
-- [ ] jx already has a lazy/transducer execution model.
+- [ ] jbq already has a lazy/transducer execution model.
 - [ ] The cleanest bridge is a native iterator over top-level array elements,
   not a full parser rewrite on day one.
 
@@ -76,11 +76,11 @@
 - [X] Add =next_raw_element= OCaml API
 - [X] Test nested/raw element extraction
 
-** Milestone 3: jx Integration Prototype
+** Milestone 3: jbq Integration Prototype
 - [X] Add an OCaml helper that turns the native handle into a lazy sequence
 - [X] Evaluate how this could feed transducer pipelines
   It is a viable bridge for top-level array streaming because it exposes a
-  pull-based =Seq.t= that plugs directly into jx's lazy/transducer runtime.
+  pull-based =Seq.t= that plugs directly into jbq's lazy/transducer runtime.
 - [X] Decide whether to continue, pivot, or stop
   Continue. The first end-to-end benchmarks are strong enough to justify
   further work on this branch.
@@ -101,20 +101,20 @@
   =where .price > 400 | take 5= on =xlarge.json=:
   - baseline: ~432.1 ms
   - simdjson default path on this branch: ~19.1 ms
-  - improvement: ~22.6x over =jx main=
+  - improvement: ~22.6x over =jbq main=
   - jq: ~234.2 ms, so this branch is ~12.3x faster than jq
 
 - [X] Benchmarked full-array reductions against baseline.
   =count= on =xlarge.json=:
   - baseline: ~431.8 ms
   - simdjson default path on this branch: ~70.3 ms
-  - improvement: ~6.1x over =jx main=
+  - improvement: ~6.1x over =jbq main=
   - jq: ~233.3 ms, so this branch is ~3.3x faster than jq
 
 - [X] Benchmarked =map .price | sum= against baseline.
   - baseline: ~452.3 ms
   - simdjson default path on this branch: ~82.8 ms
-  - improvement: ~5.5x over =jx main=
+  - improvement: ~5.5x over =jbq main=
   - jq: ~315.1 ms, so this branch is ~3.8x faster than jq
 
  - [X] Benchmarked =identity= against baseline.

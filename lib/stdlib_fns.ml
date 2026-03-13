@@ -32,6 +32,19 @@ let require_collection name input loc =
       (Printf.sprintf "%s requires array or sequence, got %s" name
          (Value.type_name input))
 
+type group_bucket = {
+  label : string;
+  mutable rev_items : Value.t list;
+}
+
+let require_object name input loc =
+  match input with
+  | Value.Object _ -> ()
+  | _ ->
+    Error.raise_ ~loc Type_mismatch
+      (Printf.sprintf "%s requires object, got %s" name
+         (Value.type_name input))
+
 let as_seq input =
   match input with
   | Value.Array xs -> List.to_seq xs
@@ -90,6 +103,36 @@ let eval_per_item env expr item =
   | Lambda { param; body; _ } -> eval_in_ctx ((param, item) :: env) item body
   | _ -> eval_in_ctx env item expr
 
+let group_label_of_value = function
+  | Value.String s -> s
+  | other -> Interpreter.value_to_string other
+
+let find_substring_from s sep start =
+  let s_len = String.length s and sep_len = String.length sep in
+  let rec matches i j =
+    if j = sep_len then true
+    else if String.unsafe_get s (i + j) = String.unsafe_get sep j then
+      matches i (j + 1)
+    else false
+  in
+  let rec search i =
+    if i + sep_len > s_len then None
+    else if matches i 0 then Some i
+    else search (i + 1)
+  in
+  search start
+
+let split_on_substring ~sep s =
+  let sep_len = String.length sep and s_len = String.length s in
+  let rec loop start acc =
+    match find_substring_from s sep start with
+    | None -> List.rev (String.sub s start (s_len - start) :: acc)
+    | Some idx ->
+      let part = String.sub s start (idx - start) in
+      loop (idx + sep_len) (part :: acc)
+  in
+  loop 0 []
+
 let rec is_selector_expr = function
   | Identity | Field _ | Index _ -> true
   | Pipe { left; right } -> is_selector_expr left && is_selector_expr right
@@ -101,7 +144,7 @@ let require_selector name expr loc =
       (Printf.sprintf "%s requires path argument" name)
 
 let exact_lookup_failed = function
-  | Error.Jx_error
+  | Error.Jbq_error
       {
         kind =
           (Key_not_found | Index_out_of_bounds | Null_access | Type_mismatch);
@@ -192,20 +235,32 @@ let dispatch env input name args loc =
     require_collection "group_by" input loc;
     let xs = Value.to_list_exn (realize_input input) in
     let groups = Hashtbl.create 16 in
+    let labels = Hashtbl.create 16 in
     let order = ref [] in
     List.iter
       (fun item ->
         let key = eval_per_item env expr item in
-        let key_str = Interpreter.value_to_string key in
-        match Hashtbl.find_opt groups key_str with
-        | Some rev_items -> Hashtbl.replace groups key_str (item :: rev_items)
+        let key_id = unique_key_of_value key in
+        match Hashtbl.find_opt groups key_id with
+        | Some bucket -> bucket.rev_items <- item :: bucket.rev_items
         | None ->
-          order := key_str :: !order;
-          Hashtbl.add groups key_str [ item ])
+          let label = group_label_of_value key in
+          (match Hashtbl.find_opt labels label with
+          | Some existing_key when existing_key <> key_id ->
+            Error.raise_ ~loc Runtime_error
+              (Printf.sprintf
+                 "group_by key label %S collides across distinct values; normalize the key explicitly"
+                 label)
+          | _ ->
+            order := key_id :: !order;
+            Hashtbl.replace labels label key_id;
+            Hashtbl.add groups key_id { label; rev_items = [ item ] }))
       xs;
     Value.object_of_fields
       (List.rev !order
-      |> List.map (fun k -> (k, Value.Array (List.rev (Hashtbl.find groups k)))))
+      |> List.map (fun key_id ->
+           let bucket = Hashtbl.find groups key_id in
+           (bucket.label, Value.Array (List.rev bucket.rev_items))))
   | "reverse", [] ->
     require_collection "reverse" input loc;
     let xs = Value.to_list_exn (realize_input input) in
@@ -330,10 +385,12 @@ let dispatch env input name args loc =
       | Value.String s -> s
       | _ -> Error.raise_ ~loc Type_mismatch "split requires string argument"
     in
+    if String.length sep = 0 then
+      Error.raise_ ~loc Runtime_error "split separator cannot be empty";
     match input with
     | Value.String s ->
       Value.Array
-        (String.split_on_char (String.get sep 0) s
+        (split_on_substring ~sep s
         |> List.map (fun s -> Value.String s))
     | _ ->
       Error.raise_ ~loc Type_mismatch
@@ -357,24 +414,15 @@ let dispatch env input name args loc =
     Value.String (String.concat sep (List.of_seq strs))
 
   (* === Object functions === *)
-  | "keys", [] -> (
-    match input with
-    | Value.Object _ ->
-      let kvs = Value.object_entries input in
-      Value.Array (Array.to_list (Array.map (fun (k, _) -> Value.String k) kvs))
-    | _ ->
-      Error.raise_ ~loc Type_mismatch
-        (Printf.sprintf "keys requires object, got %s"
-           (Value.type_name input)))
-  | "values", [] -> (
-    match input with
-    | Value.Object _ ->
-      Value.Array (Value.object_entries input |> Array.to_list |> List.map snd)
-    | _ ->
-      Error.raise_ ~loc Type_mismatch
-        (Printf.sprintf "values requires object, got %s"
-           (Value.type_name input)))
+  | "keys", [] ->
+    require_object "keys" input loc;
+    let kvs = Value.object_entries input in
+    Value.Array (Array.to_list (Array.map (fun (k, _) -> Value.String k) kvs))
+  | "values", [] ->
+    require_object "values" input loc;
+    Value.Array (Value.object_entries input |> Array.to_list |> List.map snd)
   | "pick", fields ->
+    require_object "pick" input loc;
     let field_names =
       List.map
         (fun arg ->
@@ -394,6 +442,7 @@ let dispatch env input name args loc =
            | None -> None)
          field_names)
   | "omit", fields ->
+    require_object "omit" input loc;
     let field_names =
       List.map
         (fun arg ->

@@ -1,14 +1,14 @@
-# jx
+# jbq
 
-A jq replacement with a genuinely better query language.
+JSON Bourne Query — a jq replacement with a genuinely better query language.
 
-Not "jq in Rust" or "jq in Go" — a new language that's readable, concise, and unambiguous. Every existing alternative (jaq, gojq, fq, query-json) kept jq's syntax and competed on runtime. jx competes on **language design**.
+Not "jq in Rust" or "jq in Go" — a new language that's readable, concise, and unambiguous. Every existing alternative (jaq, gojq, fq, query-json) kept jq's syntax and competed on runtime. jbq competes on **language design**.
 
 ```bash
 # jq
 .items[] | select(.price > 100) | {name, display: (.name | ascii_downcase | .[0:20])}
 
-# jx
+# jbq
 items | where .price > 100 | map {name, display: .name | lower | truncate 20}
 ```
 
@@ -24,59 +24,59 @@ opam install . --deps-only --with-test -y
 make build
 ```
 
-The binary lands at `_build/default/bin/main.exe`. Copy or symlink it as `jx`.
+The binary lands at `_build/default/bin/main.exe`. Copy or symlink it as `jbq`.
 
 ## Usage
 
 ```bash
 # Read from file
-jx 'items | where .price > 100' data.json
+jbq 'items | where .price > 100' data.json
 
 # Read from stdin
-curl -s api.example.com/data | jx '.users | map {name, email}'
+curl -s api.example.com/data | jbq '.users | map {name, email}'
 
 # Identity (pretty-print JSON)
-jx '.' data.json
+jbq '.' data.json
 
 # Raw string output (no quotes)
-jx -r '.name' data.json
+jbq -r '.name' data.json
 
 # Compact output
-jx -c '.' data.json
+jbq -c '.' data.json
 
 # Infer schema for a query result
-jx --schema '.users' data.json
+jbq --schema '.users' data.json
 
 # Infer schema for a file with the default identity query
-jx --schema -f data.json
+jbq --schema -f data.json
 
 # Sample only the first 100 elements during schema inference
-jx --schema -n 100 '.items' data.json
+jbq --schema -n 100 '.items' data.json
 
 # Drop const/enum annotations and keep only base types
-jx --schema --no-const --no-enum '.items' data.json
+jbq --schema --no-const --no-enum '.items' data.json
 ```
 
 ## Schema Inference
 
-`jx --schema` evaluates the query first, then infers a JSON Schema
+`jbq --schema` evaluates the query first, then infers a JSON Schema
 (draft 2020-12) from the result.
 
 ```bash
 # Schema for the whole input
-jx --schema '.' data.json
+jbq --schema '.' data.json
 
 # Schema for a nested collection
-jx --schema '.users' data.json
+jbq --schema '.users' data.json
 
 # File-only mode: use the default identity query
-jx --schema -f data.json
+jbq --schema -f data.json
 
 # Limit inference to the first N elements
-jx --schema -n 100 '.items' data.json
+jbq --schema -n 100 '.items' data.json
 
 # Suppress const and enum annotations
-jx --schema --no-const --no-enum '.items' data.json
+jbq --schema --no-const --no-enum '.items' data.json
 ```
 
 CLI rule of thumb:
@@ -240,18 +240,18 @@ items | map (x => {name: x.name, total: x.price * x.qty})
 | `range n` | [0, n) |
 | `range m n` | [m, n) |
 
-## jx vs jq
+## jbq vs jq
 
-|                   | jq                                      | jx                                                             |
+|                   | jq                                      | jbq                                                            |
 |-------------------|-----------------------------------------|----------------------------------------------------------------|
 | **Iteration**     | Explicit: `.items[]`                    | Implicit: `items` (collection functions iterate automatically) |
-| **Filter**        | `select(.price > 100)`                  | `where .price > 100`                                           |
+| **Filter**        | `select(.price > 100)`                  | `where .price > 100`                                          |
 | **Transform**     | `map(.name)` or `.[] \| .name`          | `map .name`                                                    |
 | **Object build**  | `{name: .name, price: .price}`          | `{name, price}` (punning)                                      |
 | **String concat** | `(.first) + " " + (.last)`              | `.first ++ " " ++ .last`                                       |
 | **String ops**    | `ascii_downcase`, `ltrimstr`            | `lower`, `trim`, `truncate`                                    |
 | **Null access**   | Silent null propagation                 | Error by default, `?` for optional                             |
-| **Exact/traverse**| `.users[0].name` / `.users[].name`     | `get .users[0].name` / `pluck .users .name`                    |
+| **Exact/traverse**| `.users[0].name` / `.users[].name`      | `get .users[0].name` / `pluck .users .name`                   |
 | **Sort**          | `sort_by(.price)`                       | `sort_by .price`                                               |
 | **Subsets**       | `{name, email}` (only top-level)        | `pick .name .email` / `omit .password`                         |
 | **Arg separator** | Nested parens                           | Whitespace or semicolons: `pick .name .email`                  |
@@ -260,19 +260,19 @@ items | map (x => {name: x.name, total: x.price * x.qty})
 
 ### What jq gets right
 
-jq is battle-tested, ubiquitous, and its streaming model handles arbitrarily large input. The `@base64`, `@uri`, `@csv` format strings are genuinely useful. `--slurp` and `--jsonargs` cover real CLI needs. jx doesn't aim to replace all of that on day one.
+jq is battle-tested, ubiquitous, and its streaming model handles arbitrarily large input. The `@base64`, `@uri`, `@csv` format strings are genuinely useful. `--slurp` and `--jsonargs` cover real CLI needs. jbq doesn't aim to replace all of that on day one.
 
 Current parser status:
-- `jx` now uses a native simdjson-based input path by default
+- `jbq` now uses a native simdjson-based input path by default
 - top-level array queries that fit the supported pipeline subset use a streamed
   `Value.Seq` path
 - other inputs fall back to a full native `Value.t` parse
 
-### Where jx diverges
+### Where jbq diverges
 
 jq's generator semantics are powerful but produce puzzling behavior. `null | .x` silently returns `null`. `empty` propagates invisibly. The difference between `.[]` and `map(.)` is subtle. `if-then` without `else` is a filter, not a conditional.
 
-jx makes one bet: a readable language with predictable semantics is worth more than compatibility with jq's 10-year ecosystem. If you know what `where`, `map`, and `|` mean, you can read any jx query cold.
+jbq makes one bet: a readable language with predictable semantics is worth more than compatibility with jq's 10-year ecosystem. If you know what `where`, `map`, and `|` mean, you can read any jbq query cold.
 
 ## Transducer Pipelines
 

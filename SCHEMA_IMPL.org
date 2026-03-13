@@ -88,7 +88,7 @@ elements with =merge= to accumulate a merged item schema.
 
 ** DONE 5. Add tests for schema inference
 
-20 test cases in =test/test_jx.ml= under ="schema"= group:
+20 test cases in =test/test_jbq.ml= under ="schema"= group:
 
 1. Scalar types: null, bool, int, float, string (5 tests)
 2. Simple object with required fields
@@ -129,7 +129,7 @@ Implemented via =infer_sampled ~n= which uses =Seq.take n= before folding.
 |-------------------+--------------------------------------------|
 | =lib/schema.ml=   | New module — 170 lines, schema inference   |
 | =bin/main.ml=     | Add --schema and -n flags, schema output   |
-| =test/test_jx.ml= | Add 20 schema tests, 108 total tests pass  |
+| =test/test_jbq.ml= | Add 20 schema tests, 108 total tests pass  |
 
 * Results
 
@@ -140,6 +140,6 @@ Implemented via =infer_sampled ~n= which uses =Seq.take n= before folding.
 - Nullable and missing fields
 - Int/float widening
 - BigInt
-- Query scoping (=jx '.users' --schema=)
+- Query scoping (=jbq '.users' --schema=)
 - Sampling (=-n 10=)
 - Compact output (=-c=)

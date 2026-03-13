@@ -3,7 +3,7 @@
 
 * Decision
 
-jx will not make plain path syntax collection-aware.
+jbq will not make plain path syntax collection-aware.
 
 This is the hard rule:
 
@@ -24,7 +24,7 @@ so with a function.
 * Why This Boundary Matters
 
 The rejected model was: "the path looks the same, but if it crosses an array it
-becomes plural." That is not acceptable for jx.
+becomes plural." That is not acceptable for jbq.
 
 The reasons are simple:
 
@@ -33,7 +33,7 @@ The reasons are simple:
 - field access stops being a stable data operation and becomes hidden control flow
 - the language gains two traversal systems: path magic and collection functions
 
-jx is better served by a small set of verbs with fixed contracts.
+jbq is better served by a small set of verbs with fixed contracts.
 
 * What Does Not Change
 

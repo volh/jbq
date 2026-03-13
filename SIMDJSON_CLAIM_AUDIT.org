@@ -7,8 +7,8 @@ This document verifies the claims around the =simdjson-spike= branch.
 
 Compared revisions:
 - =jq= version: =jq-1.8.1=
-- =jx baseline=: commit =52f3623= (=main=)
-- =jx simdjson=: commit =f8c1562= (=simdjson-spike=)
+- =jbq baseline=: commit =52f3623= (=main=)
+- =jbq simdjson=: commit =f8c1562= (=simdjson-spike=)
 
 Raw artifacts are stored under:
 =audit/simdjson-claim-audit/=
@@ -22,7 +22,7 @@ Raw artifacts are stored under:
   =JX_EXPERIMENTAL_SIMDJSON_TOP_ARRAY=1= is enabled.
   Verdict: *true*, based on code and profile output.
 
-- Claim: the branch meaningfully improves the targeted workloads over =jx main=.
+- Claim: the branch meaningfully improves the targeted workloads over =jbq main=.
   Verdict: *true*.
 
 - Claim: the branch beats =jq= on the tested streamed/reduction workloads.
@@ -37,10 +37,10 @@ Raw artifacts are stored under:
 This is the direct grep output from the branch:
 
 #+begin_src text
-test/test_jx.ml:6:  let json = Yojson.Basic.from_string json_str in
-test/test_jx.ml:7:  let input = Jx.Value.of_yojson json in
+test/test_jbq.ml:6:  let json = Yojson.Basic.from_string json_str in
+test/test_jbq.ml:7:  let input = Jbq.Value.of_yojson json in
 bin/main.ml:69:        let json = time "yojson parse" (fun () -> Yojson.Basic.from_string json_str) in
-bin/main.ml:70:        time "of_yojson convert" (fun () -> Jx.Value.of_yojson json)
+bin/main.ml:70:        time "of_yojson convert" (fun () -> Jbq.Value.of_yojson json)
 bin/main.ml:87:  | Yojson.Json_error msg ->
 lib/dune:3: (libraries yojson sedlex)
 lib/interpreter.ml:257:    Yojson.Basic.to_string (Value.to_yojson other)
@@ -62,29 +62,29 @@ Conclusion:
 * Code Path Audit
 
 Current branch CLI input selection:
-[bin/main.ml](/home/roman/dev/sandbox/jx/bin/main.ml#L59)
+[bin/main.ml](/home/roman/dev/sandbox/jbq/bin/main.ml#L59)
 
 #+begin_src text
     let input =
       if simdjson_top_array && supports_simdjson_top_array_path ast then
         try
           time "simdjson top-array init" (fun () ->
-            Jx.Simdjson_stream.top_array_input json_str)
+            Jbq.Simdjson_stream.top_array_input json_str)
         with Failure _ ->
-          time "simdjson parse" (fun () -> Jx.Simdjson_native.parse_value json_str)
+          time "simdjson parse" (fun () -> Jbq.Simdjson_native.parse_value json_str)
       else if simdjson_top_array then
-        time "simdjson parse" (fun () -> Jx.Simdjson_native.parse_value json_str)
+        time "simdjson parse" (fun () -> Jbq.Simdjson_native.parse_value json_str)
       else
         let json = time "yojson parse" (fun () -> Yojson.Basic.from_string json_str) in
-        time "of_yojson convert" (fun () -> Jx.Value.of_yojson json)
+        time "of_yojson convert" (fun () -> Jbq.Value.of_yojson json)
 #+end_src
 
 Baseline main CLI input path:
-[bin/main.ml](/tmp/jx-main/bin/main.ml#L37)
+[bin/main.ml](/tmp/jbq-main/bin/main.ml#L37)
 
 #+begin_src text
     let json = time "yojson parse" (fun () -> Yojson.Basic.from_string json_str) in
-    let input = time "of_yojson convert" (fun () -> Jx.Value.of_yojson json) in
+    let input = time "of_yojson convert" (fun () -> Jbq.Value.of_yojson json) in
 #+end_src
 
 Conclusion:
@@ -98,8 +98,8 @@ Conclusion:
 Command:
 
 #+begin_src shell
-JX_PROFILE=1 env JX_EXPERIMENTAL_SIMDJSON_TOP_ARRAY=1 \
-  _build/default/bin/main.exe '.name' /tmp/jx-small-object.json
+JBQ_PROFILE=1 env JX_EXPERIMENTAL_SIMDJSON_TOP_ARRAY=1 \
+  _build/default/bin/main.exe '.name' /tmp/jbq-small-object.json
 #+end_src
 
 Stdout:
@@ -127,7 +127,7 @@ This verifies that the branch can take the full =simdjson parse= path with no
 Command:
 
 #+begin_src shell
-JX_PROFILE=1 env JX_EXPERIMENTAL_SIMDJSON_TOP_ARRAY=1 \
+JBQ_PROFILE=1 env JX_EXPERIMENTAL_SIMDJSON_TOP_ARRAY=1 \
   _build/default/bin/main.exe 'where .price > 400 | take 5' bench/data/xlarge.json
 #+end_src
 
@@ -150,7 +150,7 @@ This verifies that the branch can take the streamed top-array path with no
 Command:
 
 #+begin_src shell
-JX_PROFILE=1 /tmp/jx-main/_build/default/bin/main.exe 'count' bench/data/xlarge.json
+JBQ_PROFILE=1 /tmp/jbq-main/_build/default/bin/main.exe 'count' bench/data/xlarge.json
 #+end_src
 
 Stdout:
@@ -183,18 +183,18 @@ Benchmark 1: jq
   Time (mean ± σ):     236.6 ms ±   8.6 ms    [User: 202.3 ms, System: 32.8 ms]
   Range (min … max):   224.9 ms … 250.8 ms    12 runs
  
-Benchmark 2: jx-main
+Benchmark 2: jbq-main
   Time (mean ± σ):     430.4 ms ±  12.2 ms    [User: 384.6 ms, System: 43.5 ms]
   Range (min … max):   423.1 ms … 454.8 ms    6 runs
  
-Benchmark 3: jx-simdjson
+Benchmark 3: jbq-simdjson
   Time (mean ± σ):      19.4 ms ±   1.3 ms    [User: 10.2 ms, System: 8.9 ms]
   Range (min … max):    16.8 ms …  27.3 ms    167 runs
  
 Summary
-  jx-simdjson ran
+  jbq-simdjson ran
    12.17 ± 0.95 times faster than jq
-   22.14 ± 1.65 times faster than jx-main
+   22.14 ± 1.65 times faster than jbq-main
 #+end_src
 
 ** count
@@ -204,18 +204,18 @@ Benchmark 1: jq
   Time (mean ± σ):     235.0 ms ±   6.4 ms    [User: 199.9 ms, System: 33.9 ms]
   Range (min … max):   226.7 ms … 246.2 ms    12 runs
  
-Benchmark 2: jx-main
+Benchmark 2: jbq-main
   Time (mean ± σ):     432.1 ms ±  16.5 ms    [User: 380.3 ms, System: 49.6 ms]
   Range (min … max):   414.2 ms … 461.1 ms    7 runs
  
-Benchmark 3: jx-simdjson
+Benchmark 3: jbq-simdjson
   Time (mean ± σ):      69.8 ms ±   3.5 ms    [User: 59.9 ms, System: 9.2 ms]
   Range (min … max):    63.8 ms …  79.3 ms    40 runs
  
 Summary
-  jx-simdjson ran
+  jbq-simdjson ran
     3.37 ± 0.19 times faster than jq
-    6.19 ± 0.39 times faster than jx-main
+    6.19 ± 0.39 times faster than jbq-main
 #+end_src
 
 ** map .price | sum
@@ -225,18 +225,18 @@ Benchmark 1: jq
   Time (mean ± σ):     314.9 ms ±   6.3 ms    [User: 277.0 ms, System: 36.5 ms]
   Range (min … max):   306.3 ms … 326.4 ms    9 runs
  
-Benchmark 2: jx-main
+Benchmark 2: jbq-main
   Time (mean ± σ):     445.5 ms ±  10.6 ms    [User: 392.9 ms, System: 49.2 ms]
   Range (min … max):   436.4 ms … 462.8 ms    6 runs
  
-Benchmark 3: jx-simdjson
+Benchmark 3: jbq-simdjson
   Time (mean ± σ):      82.3 ms ±   3.7 ms    [User: 71.7 ms, System: 9.8 ms]
   Range (min … max):    76.0 ms …  90.1 ms    35 runs
  
 Summary
-  jx-simdjson ran
+  jbq-simdjson ran
     3.83 ± 0.19 times faster than jq
-    5.41 ± 0.28 times faster than jx-main
+    5.41 ± 0.28 times faster than jbq-main
 #+end_src
 
 ** identity
@@ -246,18 +246,18 @@ Benchmark 1: jq
   Time (mean ± σ):     496.0 ms ±  18.6 ms    [User: 458.7 ms, System: 34.7 ms]
   Range (min … max):   472.9 ms … 519.0 ms    5 runs
  
-Benchmark 2: jx-main
+Benchmark 2: jbq-main
   Time (mean ± σ):     806.5 ms ±  26.8 ms    [User: 740.0 ms, System: 62.0 ms]
   Range (min … max):   766.8 ms … 829.1 ms    5 runs
  
-Benchmark 3: jx-simdjson
+Benchmark 3: jbq-simdjson
   Time (mean ± σ):     500.8 ms ±   2.8 ms    [User: 465.1 ms, System: 33.5 ms]
   Range (min … max):   497.7 ms … 504.9 ms    5 runs
  
 Summary
   jq ran
-    1.01 ± 0.04 times faster than jx-simdjson
-    1.63 ± 0.08 times faster than jx-main
+    1.01 ± 0.04 times faster than jbq-simdjson
+    1.63 ± 0.08 times faster than jbq-main
 #+end_src
 
 * Memory Usage Audit
@@ -317,7 +317,7 @@ Interpretation:
   for input parsing.
 
 - It *is* correct to say that on the tested commands, this branch beats both
-  =jx main= and =jq= for:
+  =jbq main= and =jq= for:
   - =where .price > 400 | take 5=
   - =count=
   - =map .price | sum=

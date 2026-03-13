@@ -1,6 +1,6 @@
 (lang dune 3.17)
 
-(name jx)
+(name jbq)
 (version 0.1.0)
 
 (generate_opam_files true)
@@ -12,13 +12,13 @@
 (authors "Roman Sever")
 
 (source
- (uri "https://github.com/romansever/jx"))
+ (uri "https://github.com/romansever/jbq"))
 
 (package
- (name jx)
+ (name jbq)
  (synopsis "A better query language for JSON")
  (description
-  "jx is a jq replacement with a genuinely better query language. Readable, concise, unambiguous. Not jq-in-another-language — a new language for JSON.")
+  "jbq (JSON Bourne Query) is a jq replacement with a genuinely better query language. Readable, concise, unambiguous. Not jq-in-another-language — a new language for JSON.")
  (depends
   (ocaml (>= 5.4.0))
   (dune (>= 3.17))

@@ -75,7 +75,7 @@ colorizes output via =Console_style=, and distinguishes =lexer_error=,
 
 * The Gap
 
-| Aspect              | jx-schema          | query-json                    |
+| Aspect              | jbq-schema         | query-json                    |
 |---------------------+--------------------+-------------------------------|
 | Kind representation | variant type       | string (open, flexible)       |
 | Context             | none (flat string) | structured list               |

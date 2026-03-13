@@ -5,12 +5,15 @@ let dispatch_ref :
     =
   ref (fun _ _ _ _ _ -> failwith "stdlib not initialized")
 
+let clamp_slice_bound len i =
+  if i < 0 then max 0 (len + i) else min i len
+
 let rec eval (env : (string * Value.t) list) (input : Value.t) (expr : expr) : Value.t =
   match expr with
   | Identity -> input
   | Literal lit -> eval_literal lit
   | Field { name; optional; loc } -> eval_field input name optional loc
-  | Index { expr = _; index; loc } -> eval_index input index loc
+  | Index { expr = _; index; loc } -> eval_index env input index loc
   | Pipe { left; right } ->
     let mid = eval env input left in
     eval env mid right
@@ -83,10 +86,10 @@ and eval_field input name optional loc =
       Error.raise_ ~loc Type_mismatch
         (Printf.sprintf "cannot access .%s on %s" name (Value.type_name input))
 
-and eval_index input index loc =
+and eval_index env input index loc =
   match index with
   | Single idx_expr ->
-    let idx = eval [] input idx_expr in
+    let idx = eval env input idx_expr in
     (match (input, idx) with
     | Value.Array xs, Value.Int i ->
       let len = List.length xs in
@@ -112,16 +115,16 @@ and eval_index input index loc =
       let start_i =
         match start_expr with
         | Some e -> (
-          match eval [] input e with
-          | Value.Int i -> if i < 0 then max 0 (len + i) else i
+          match eval env input e with
+          | Value.Int i -> clamp_slice_bound len i
           | _ -> Error.raise_ ~loc Type_mismatch "slice index must be integer")
         | None -> 0
       in
       let end_i =
         match end_expr with
         | Some e -> (
-          match eval [] input e with
-          | Value.Int i -> if i < 0 then max 0 (len + i) else min i len
+          match eval env input e with
+          | Value.Int i -> clamp_slice_bound len i
           | _ -> Error.raise_ ~loc Type_mismatch "slice index must be integer")
         | None -> len
       in
@@ -136,16 +139,16 @@ and eval_index input index loc =
       let start_i =
         match start_expr with
         | Some e -> (
-          match eval [] input e with
-          | Value.Int i -> if i < 0 then max 0 (len + i) else i
+          match eval env input e with
+          | Value.Int i -> clamp_slice_bound len i
           | _ -> Error.raise_ ~loc Type_mismatch "slice index must be integer")
         | None -> 0
       in
       let end_i =
         match end_expr with
         | Some e -> (
-          match eval [] input e with
-          | Value.Int i -> if i < 0 then max 0 (len + i) else min i len
+          match eval env input e with
+          | Value.Int i -> clamp_slice_bound len i
           | _ -> Error.raise_ ~loc Type_mismatch "slice index must be integer")
         | None -> len
       in

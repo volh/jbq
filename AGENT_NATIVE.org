@@ -1,4 +1,4 @@
-#+TITLE: Agent-Native Functionality — jx as a Token-Efficient JSON Tool
+#+TITLE: Agent-Native Functionality — jbq as a Token-Efficient JSON Tool
 #+AUTHOR: Roman Sever
 #+DATE: 2026-03-09
 #+STARTUP: overview
@@ -9,7 +9,7 @@ LLM agents process JSON constantly — API responses, config files, log output,
 tool results. Every interaction has a token cost. The tool that minimizes tokens
 per unit of useful information wins agent adoption.
 
-jq was designed for humans at terminals. jx already has a better query language.
+jq was designed for humans at terminals. jbq already has a better query language.
 The next move is to optimize the *output side* for machine consumers — where the
 real token waste happens.
 
@@ -25,14 +25,14 @@ Agents interacting with JSON follow a predictable pattern:
 
 Each step has a token budget. Minimizing it requires purpose-built output modes.
 
-* Gap Analysis: jx vs jq for Agents
+* Gap Analysis: jbq vs jq for Agents
 
 ** What jq Already Covers
 
 These jq capabilities work fine for agents. No need to differentiate here;
 just reach parity.
 
-| Capability           | jq                     | jx now           | Gap    |
+| Capability           | jq                     | jbq now          | Gap    |
 |----------------------+------------------------+------------------+--------|
 | Compact output       | =-c=                   | =-c=             | Parity |
 | Raw string output    | =-r=                   | =-r=             | Parity |
@@ -51,7 +51,7 @@ differentiators.
 
 ** Where jq Is Ahead
 
-| Capability          | jq                           | jx now    | Notes                  |
+| Capability          | jq                           | jbq now   | Notes                  |
 |---------------------+------------------------------+-----------+------------------------|
 | Streaming input     | =--stream= (path/value pairs)| /missing/ | On roadmap (high ROI)  |
 | Format strings      | =@tsv @csv @sh @html @uri @base64= | /none/ | See [[*=--format= / =@fmt= Output Modes][format modes]]          |
@@ -60,17 +60,17 @@ differentiators.
 | Filter from file    | =-f filename=                | /none/    | Build for long queries |
 | Streaming errors    | =--stream-errors=            | /none/    | Build with streaming   |
 
-=--stream= is the biggest gap. Without it, jx pays full parse cost on every
+=--stream= is the biggest gap. Without it, jbq pays full parse cost on every
 query regardless of how much output is consumed. An agent running =take 5= on
 a 100K-element array still waits for full parse. This is the #1 blocker for
 large-file agent use and is already on the roadmap.
 
-** Where jx Is Already Ahead (Syntax)
+** Where jbq Is Already Ahead (Syntax)
 
 The query language is already a token advantage. Agents write queries — shorter
 correct queries mean fewer generation tokens and fewer retries.
 
-| Task                    | jq tokens | jx tokens | Savings |
+| Task                    | jq tokens | jbq tokens | Savings |
 |-------------------------+-----------+-----------+---------|
 | Filter + pick           |       ~18 |       ~14 | 22%     |
 | Sort + take             |       ~22 |       ~14 | 36%     |
@@ -80,13 +80,13 @@ correct queries mean fewer generation tokens and fewer retries.
 
 #+begin_src bash
 # jq: .items[] | select(.price > 100) | {name: .name, price: .price}
-# jx: .items | where .price > 100 | pick .name .price
+# jbq: .items | where .price > 100 | pick .name .price
 
 # jq: [.events[] | .type] | group_by(.) | map({key:.[0], count:length})
-# jx: .events | group_by .type | map count
+# jbq: .events | group_by .type | map count
 
 # jq: .users[] | select(.active) | {name, email: (.email // "none")}
-# jx: .users | where .active | map {name, email: .email ?? "none"}
+# jbq: .users | where .active | map {name, email: .email ?? "none"}
 #+end_src
 
 Three unbreakable rules (dot = data, bare word = function, pipe = composition)
@@ -94,12 +94,12 @@ mean agents can reason about syntax from minimal examples. jq's generator model,
 implicit iteration via =[]=, and overloaded operators require more few-shot
 context to get right.
 
-** Where jx Can Differentiate (New Capabilities)
+** Where jbq Can Differentiate (New Capabilities)
 
 These do not exist in jq and cannot be approximated without significant effort.
 This is the competitive surface for agent adoption.
 
-| Capability          | jq approximation                      | Token cost (jq) | Proposed jx  | Token cost (jx) |
+| Capability          | jq approximation                      | Token cost (jq) | Proposed jbq  | Token cost (jbq) |
 |---------------------+---------------------------------------+-----------------+--------------+-----------------|
 | Schema inference    | 50-token recursive =def schema: ...=  | 50 + ~200 out   | =--schema=   | 5 + ~40 out     |
 | Path listing        | =[paths \| map(tostring) \| join(".")]= | 20 + noisy out  | =--paths=    | 5 + ~30 out     |
@@ -129,11 +129,11 @@ fields exist.
 
 #+begin_src bash
 # Compact inline format (default for agents)
-$ jx --schema data.json
+$ jbq --schema data.json
 {"type":"object","properties":{"users":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"age":{"type":"integer"},"address":{"type":"object","properties":{"city":{"type":"string"},"zip":{"type":"string"}}}}}},"config":{"type":"object","properties":{"version":{"type":"integer"}}}}}
 
 # Pretty-printed (for human review)
-$ jx --schema data.json
+$ jbq --schema data.json
 {
   "type": "object",
   "properties": {
@@ -168,7 +168,7 @@ $ jx --schema data.json
 
 Output MUST be valid [[https://json-schema.org/draft/2020-12][JSON Schema (draft 2020-12)]]. This is non-negotiable for
 agent use — agents already know how to read JSON Schema. Inventing a custom
-format means agents need jx-specific instructions in their system prompt.
+format means agents need jbq-specific instructions in their system prompt.
 JSON Schema is a lingua franca.
 
 The output schema uses these JSON Schema keywords:
@@ -227,7 +227,7 @@ Does not sample — runs over entire input.
 
 *** Token Impact
 
-| Scenario                | jq (query + output) | jx --schema (query + output) | Savings |
+| Scenario                | jq (query + output) | jbq --schema (query + output) | Savings |
 |-------------------------+---------------------+------------------------------+---------|
 | Explore 1K-line JSON    | ~50 + ~200 = 250    | ~5 + ~60 = 65                | 74%     |
 | Explore 10K-line JSON   | ~50 + ~200 = 250    | ~5 + ~60 = 65                | 74%     |
@@ -250,7 +250,7 @@ array index — noisy and not directly usable as queries.
 *** The Solution
 
 #+begin_src bash
-$ jx --paths data.json
+$ jbq --paths data.json
 .users
 .users[].name
 .users[].age
@@ -266,13 +266,13 @@ $ jx --paths data.json
 .config.features[]
 #+end_src
 
-Output paths use jx query syntax. Agent copies a path directly into the next
-=jx= invocation. Arrays are collapsed to =[]=, not expanded per-index.
+Output paths use jbq query syntax. Agent copies a path directly into the next
+=jbq= invocation. Arrays are collapsed to =[]=, not expanded per-index.
 
 *** Depth control
 
 #+begin_src bash
-$ jx --paths --depth 2 data.json
+$ jbq --paths --depth 2 data.json
 .users
 .users[].name
 .users[].age
@@ -328,7 +328,7 @@ jq -r '["name","age","city"], (.users[] | [.name, .age, .city]) | @tsv' data.jso
 # No column alignment
 #+end_src
 
-*** Proposed jx Approach
+*** Proposed jbq Approach
 
 Two levels: CLI flags for common cases, =@fmt= syntax for inline use.
 
@@ -336,21 +336,21 @@ Two levels: CLI flags for common cases, =@fmt= syntax for inline use.
 
 #+begin_src bash
 # Auto-detect columns from object keys, include header row
-$ jx '.users | pick .name .age .city' --tsv data.json
+$ jbq '.users | pick .name .age .city' --tsv data.json
 name	age	city
 Alice	30	NYC
 Bob	25	LA
 Charlie	35	Chicago
 
 # CSV variant
-$ jx '.users | pick .name .age .city' --csv data.json
+$ jbq '.users | pick .name .age .city' --csv data.json
 name,age,city
 Alice,30,NYC
 Bob,25,LA
 Charlie,35,Chicago
 
 # Lines mode: one value per line (useful for piping to other tools)
-$ jx '.users | map .email' --lines data.json
+$ jbq '.users | map .email' --lines data.json
 alice@example.com
 bob@example.com
 charlie@example.com
@@ -369,15 +369,15 @@ For cases where the format is part of the query, not the output mode:
 
 #+begin_src bash
 # Shell-safe output for xargs
-$ jx '.files | map .path | @sh' data.json
+$ jbq '.files | map .path | @sh' data.json
 'path/to/file one.txt' 'path/to/file two.txt'
 
 # URI encoding
-$ jx '.query | @uri' data.json
+$ jbq '.query | @uri' data.json
 hello%20world
 
 # Base64
-$ jx '.secret | @base64' data.json
+$ jbq '.secret | @base64' data.json
 aGVsbG8=
 #+end_src
 
@@ -438,7 +438,7 @@ if jq -e '.config.feature_enabled' data.json > /dev/null 2>&1; then
 fi
 #+end_src
 
-jx needs the same capability. Without =-e=, agents must parse the output
+jbq needs the same capability. Without =-e=, agents must parse the output
 string to determine truth/falsehood — wasteful.
 
 *** The Solution
@@ -457,10 +457,10 @@ Combined with =has= builtin (to be implemented):
 
 #+begin_src bash
 # Check field existence
-jx -e 'has .config.dark_mode' data.json
+jbq -e 'has .config.dark_mode' data.json
 
 # Check condition
-jx -e '.users | where .active | count > 0' data.json
+jbq -e '.users | where .active | count > 0' data.json
 #+end_src
 
 ** =--json-errors= — Machine-Readable Error Output
@@ -488,11 +488,11 @@ fragile.
 *** The Solution
 
 #+begin_src bash
-$ jx --json-errors '.users | where .naem > 5' data.json
+$ jbq --json-errors '.users | where .naem > 5' data.json
 {"kind":"key_not_found","message":"key \"naem\" not found","location":{"col":18,"len":4},"suggestion":"name","available":["name","age","email","city"]}
 #+end_src
 
-jx already has structured errors internally (=error.ml= with error kinds,
+jbq already has structured errors internally (=error.ml= with error kinds,
 locations, and Levenshtein suggestions). This flag serializes them as JSON
 instead of formatting for human display.
 
@@ -536,12 +536,12 @@ data. Reading the full output wastes tokens when only a sample is needed.
 
 #+begin_src bash
 # Show first 3 elements of top-level array
-$ jx --head 3 data.json
+$ jbq --head 3 data.json
 [{"name":"Alice","age":30,"city":"NYC"},{"name":"Bob","age":25,"city":"LA"},{"name":"Charlie","age":35,"city":"Chicago"}]
 # (997 more elements)
 
 # Works with queries too
-$ jx --head 2 '.users | where .active' data.json
+$ jbq --head 2 '.users | where .active' data.json
 [{"name":"Alice","age":30},{"name":"Dave","age":28}]
 # (truncated after 2 results)
 #+end_src
@@ -567,7 +567,7 @@ trigger early exit from the parser itself.
 *** The Problem
 
 Agents need to check field existence. jq has =has("key")= which returns
-true/false. jx currently has =.field?= (returns null if missing) but no
+true/false. jbq currently has =.field?= (returns null if missing) but no
 boolean existence check.
 
 *** The Solution
@@ -577,20 +577,20 @@ boolean existence check.
 $ jq 'has("config")' data.json
 true
 
-# jx (proposed)
-$ jx 'has .config' data.json
+# jbq (proposed)
+$ jbq 'has .config' data.json
 true
 
 # Nested path check
-$ jx 'has .config.features.dark_mode' data.json
+$ jbq 'has .config.features.dark_mode' data.json
 false
 
 # Combined with -e for shell conditionals
-$ jx -e 'has .config.features' data.json && echo "exists"
+$ jbq -e 'has .config.features' data.json && echo "exists"
 #+end_src
 
-Unlike jq's =has("key")= which takes a string argument, jx's =has= takes a
-path expression — consistent with jx's dot-means-data rule. This is more
+Unlike jq's =has("key")= which takes a string argument, jbq's =has= takes a
+path expression — consistent with jbq's dot-means-data rule. This is more
 natural and saves the quoting tokens.
 
 ** =--slurp= / =-s= — JSONL Input
@@ -602,17 +602,17 @@ natural and saves the quoting tokens.
 *** The Problem
 
 Many agent tools output JSON Lines (one JSON value per line). jq handles this
-with =-s= (slurp into array). jx currently requires well-formed JSON input.
+with =-s= (slurp into array). jbq currently requires well-formed JSON input.
 
 *** The Solution
 
 #+begin_src bash
 # Read JSONL, slurp into array, process
-$ cat events.jsonl | jx -s 'where .level == "error" | count'
+$ cat events.jsonl | jbq -s 'where .level == "error" | count'
 42
 
 # Without slurp: each line processed independently (default for JSONL)
-$ cat events.jsonl | jx 'pick .timestamp .message' --tsv
+$ cat events.jsonl | jbq 'pick .timestamp .message' --tsv
 #+end_src
 
 For agent use, JSONL is extremely common — it's the output format for =docker
@@ -626,8 +626,8 @@ logging frameworks.
 :END:
 
 #+begin_src bash
-# Use jx as a JSON constructor
-$ jx -n '{name: "test", values: range 5}'
+# Use jbq as a JSON constructor
+$ jbq -n '{name: "test", values: range 5}'
 {"name":"test","values":[0,1,2,3,4]}
 #+end_src
 
@@ -655,7 +655,7 @@ Features ranked by (agent value * feasibility / effort):
 | 13 | Streaming input  | Critical   | Large   | /on roadmap/  | Planned |
 
 Items 1-5 form a coherent "agent-native" release. Items 6-12 are incremental.
-Item 13 (streaming) is already planned and is the prerequisite for jx to handle
+Item 13 (streaming) is already planned and is the prerequisite for jbq to handle
 large files competitively.
 
 * The Three-Command Agent Workflow
@@ -664,18 +664,18 @@ The ideal agent interaction with unknown JSON:
 
 #+begin_src bash
 # Step 1: Understand structure (60 tokens)
-$ jx --schema data.json
+$ jbq --schema data.json
 {"type":"object","properties":{"users":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"age":{"type":"integer"},"email":{"type":"string"}},"required":["name","age","email"]}}}}
 
 # Step 2: See what's queryable (30 tokens)
-$ jx --paths data.json
+$ jbq --paths data.json
 .users
 .users[].name
 .users[].age
 .users[].email
 
 # Step 3: Extract precisely what's needed (output tokens proportional to result)
-$ jx '.users | where .age > 30 | pick .name .email' --tsv data.json
+$ jbq '.users | where .age > 30 | pick .name .email' --tsv data.json
 name	email
 Alice	alice@co.com
 Charlie	charlie@co.com
@@ -688,10 +688,10 @@ the raw JSON: ~15,000 tokens for a moderately-sized file.
 
 #+begin_quote
 jq is a power tool for humans who memorized the syntax.
-jx is the JSON tool that agents reach for first.
+jbq is the JSON tool that agents reach for first.
 #+end_quote
 
-| Axis              | jq                          | jx (with agent features)     |
+| Axis              | jq                          | jbq (with agent features)     |
 |-------------------+-----------------------------+------------------------------|
 | Query cost        | High (complex syntax)       | Low (readable, 3 rules)      |
 | Exploration cost  | O(data size)                | O(structure complexity)       |
@@ -702,7 +702,7 @@ jx is the JSON tool that agents reach for first.
 | Ecosystem fit     | Universal                   | Growing                      |
 
 The pitch to agent framework authors: "Every =jq -c= invocation your agent
-runs could be a =jx --schema= that costs 99% fewer tokens."
+runs could be a =jbq --schema= that costs 99% fewer tokens."
 
 * Implementation Notes
 
@@ -759,12 +759,12 @@ context. Only serialization logic is new.
 
 1. Should =--schema= output go to stdout or stderr?
    - stdout: consistent with "the output IS the schema"
-   - stderr: allows =jx --schema 'query' file= to output both query result
+   - stderr: allows =jbq --schema 'query' file= to output both query result
      and schema (probably not useful)
    - *Recommendation*: stdout. =--schema= replaces normal output.
 
 2. Should =--paths= apply after query evaluation or on raw input?
-   - After query: =jx --paths '.users' data.json= shows paths within users
+   - After query: =jbq --paths '.users' data.json= shows paths within users
    - On raw input: always shows full document paths
    - *Recommendation*: after query. More flexible, lets agent narrow scope.
 

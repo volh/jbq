@@ -15,12 +15,12 @@ type t = {
   suggestion : string option;
 }
 
-exception Jx_error of t
+exception Jbq_error of t
 
 let make ?loc ?suggestion kind message = { kind; message; loc; suggestion }
 
 let raise_ ?loc ?suggestion kind message =
-  raise (Jx_error (make ?loc ?suggestion kind message))
+  raise (Jbq_error (make ?loc ?suggestion kind message))
 
 let kind_to_string = function
   | Parse_error -> "parse_error"
