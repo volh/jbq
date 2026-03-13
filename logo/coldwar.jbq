@@ -1,0 +1,28 @@
+let cx    = .canvas.w / 2                                        in
+let bbase = .canvas.h * 82 / 100                                 in
+let bcap  = (bbase) - .brace.size                                in
+let beye  = (bcap) + .brace.size * 42 / 100                     in
+let bx    = (cx) - .brace.size * 44 / 100                       in
+
+let glx = (cx) - .glasses.bridge / 2 - .glasses.lens_w          in
+let grx = (cx) + .glasses.bridge / 2                            in
+let gly = (beye) - .glasses.lens_h / 2                          in
+
+let gx  = (cx) + .brace.size / 2                                in
+let gy  = (beye) + .brace.size / 10                             in
+
+let ts = .tagline.size                                           in
+let qs = .tagline.sub_size                                       in
+let ty = .canvas.h * 94 / 100                                    in
+
+let header   = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 ${.canvas.w} ${.canvas.h}'><rect width='${.canvas.w}' height='${.canvas.h}' fill='${.colors.bg}'/>" in
+let brace    = "<text x='${bx}' y='${bbase}' font-size='${.brace.size}' font-family='monospace' fill='${.colors.body}'>{}</text>" in
+let lens_l   = "<rect x='${glx}' y='${gly}' width='${.glasses.lens_w}' height='${.glasses.lens_h}' rx='${.glasses.rx}' fill='${.colors.lens}' opacity='${.colors.lens_opacity}'/>" in
+let lens_r   = "<rect x='${grx}' y='${gly}' width='${.glasses.lens_w}' height='${.glasses.lens_h}' rx='${.glasses.rx}' fill='${.colors.lens}' opacity='${.colors.lens_opacity}'/>" in
+let bridge_  = "<line x1='${(glx) + .glasses.lens_w}' y1='${(gly) + .glasses.lens_h / 2}' x2='${grx}' y2='${(gly) + .glasses.lens_h / 2}' stroke='${.colors.bridge}' stroke-width='2'/>" in
+let gun_body = "<rect x='${gx}' y='${gy}' width='${.gun.w}' height='${.gun.h}' fill='${.colors.gun}'/>" in
+let gun_bar  = "<rect x='${(gx) + .gun.w}' y='${(gy) + (.gun.h - .gun.barrel_h) / 2}' width='${.gun.barrel_w}' height='${.gun.barrel_h}' fill='${.colors.gun}'/>" in
+let gun_grip = "<rect x='${(gx) + .gun.w * 6 / 10}' y='${(gy) + .gun.h}' width='${.gun.handle_w}' height='${.gun.handle_h}' fill='${.colors.gun}'/>" in
+let tagline  = "<text x='${cx}' y='${ty}' font-size='${ts}' text-anchor='middle' font-family='monospace' fill='${.colors.text}'>holy shit this is json bourne <tspan font-size='${qs}' fill='${.colors.dim}'>query</tspan></text>" in
+
+(header) ++ (brace) ++ (lens_l) ++ (lens_r) ++ (bridge_) ++ (gun_body) ++ (gun_bar) ++ (gun_grip) ++ (tagline) ++ "</svg>"

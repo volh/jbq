@@ -1,0 +1,17 @@
+{
+  "canvas":  { "w": 600, "h": 320 },
+  "brace":   { "size": 200, "font": "monospace" },
+  "glasses": { "lens_w": 65, "lens_h": 28, "rx": 9, "bridge": 20 },
+  "gun":     { "w": 90, "h": 20, "barrel_w": 42, "barrel_h": 10, "handle_w": 18, "handle_h": 38 },
+  "tagline": { "size": 24, "sub_size": 12 },
+  "colors": {
+    "bg":           "#0a0e1a",
+    "body":         "#e8eaf0",
+    "lens":         "#1a8fff",
+    "lens_opacity": "0.88",
+    "bridge":       "#556677",
+    "gun":          "#5a5a6e",
+    "text":         "#e8eaf0",
+    "dim":          "#384070"
+  }
+}

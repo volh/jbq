@@ -1,0 +1,33 @@
+let cx    = .canvas.w / 2                                            in
+let bbase = .canvas.h * 9 / 10                                       in
+let btop  = (bbase) - .brace.size * .brace.top_frac / 100           in
+let bmid  = (bbase) - .brace.size * .brace.mid_frac / 100           in
+let bx    = (cx) - .brace.size * 44 / 100                           in
+
+let hby = (btop) - 4                                                 in
+let hbx = (cx) - .hat.brim_w / 2                                    in
+let hcy = (hby) - .hat.crown_h                                       in
+let hcx = (cx) - .hat.crown_w / 2                                   in
+
+let glx = (cx) - .glasses.bridge / 2 - .glasses.lens_w              in
+let grx = (cx) + .glasses.bridge / 2                                in
+let gly = (bmid) - .glasses.lens_h / 2                              in
+
+let gx  = (cx) + .brace.size * 48 / 100                             in
+let gy  = (bmid) - .gun.h / 2                                       in
+
+let parts = [
+  "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 ${.canvas.w} ${.canvas.h}'>",
+  "<rect x='${hcx}' y='${hcy}' width='${.hat.crown_w}' height='${.hat.crown_h}' fill='${.colors.hat}'/>",
+  "<rect x='${hbx}' y='${hby}' width='${.hat.brim_w}' height='${.hat.brim_h}' fill='${.colors.hat}'/>",
+  "<text x='${bx}' y='${bbase}' font-size='${.brace.size}' font-family='monospace' fill='${.colors.body}'>{}</text>",
+  "<rect x='${glx}' y='${gly}' width='${.glasses.lens_w}' height='${.glasses.lens_h}' rx='${.glasses.rx}' fill='${.colors.lens}' opacity='${.colors.lens_opacity}'/>",
+  "<rect x='${grx}' y='${gly}' width='${.glasses.lens_w}' height='${.glasses.lens_h}' rx='${.glasses.rx}' fill='${.colors.lens}' opacity='${.colors.lens_opacity}'/>",
+  "<line x1='${(glx) + .glasses.lens_w}' y1='${(gly) + .glasses.lens_h / 2}' x2='${grx}' y2='${(gly) + .glasses.lens_h / 2}' stroke='${.colors.bridge}' stroke-width='2'/>",
+  "<rect x='${gx}' y='${gy}' width='${.gun.w}' height='${.gun.h}' fill='${.colors.gun}'/>",
+  "<rect x='${(gx) + .gun.w}' y='${(gy) + (.gun.h - .gun.barrel_h) / 2}' width='${.gun.barrel_w}' height='${.gun.barrel_h}' fill='${.colors.gun}'/>",
+  "<rect x='${(gx) + .gun.w * 6 / 10}' y='${(gy) + .gun.h}' width='${.gun.handle_w}' height='${.gun.handle_h}' fill='${.colors.gun}'/>",
+  "</svg>"
+] in
+
+parts | join("")
