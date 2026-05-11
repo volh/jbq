@@ -15,7 +15,7 @@ competed on runtime performance. jbq competes on *language design*.
 .items[] | select(.price > 100) | {name, display: (.name | ascii_downcase | .[0:20])}
 
 # jbq
-items | where .price > 100 | map {name, display: .name | lower | truncate 20}
+.items | where .price > 100 | map {name, display: .name | lower | truncate 20}
 #+end_src
 
 * Design Decisions (Locked)
@@ -43,7 +43,7 @@ Avoids ="3" + 4= ambiguity. Explicit string concatenation.
 
 ** Implicit iteration
 When input is an array, =where .x > 5= iterates implicitly.
-No need for =items | where= when piping to a filter function.
+No need for jq-style =.items[]= when piping an array to a filter function.
 
 ** Semicolons for function arg separation
 =sort_by .price; .name= — semicolons separate expression args.
@@ -119,7 +119,7 @@ let total = .price * .qty in {name, total}
 
 *** Lambdas (when point-free isn't enough)
 #+begin_src
-items | map (x => {name: x.name, total: x.price * x.qty})
+.items | map (x => {name: x.name, total: x.price * x.qty})
 #+end_src
 
 ** Value Types
@@ -181,7 +181,7 @@ items | map (x => {name: x.name, total: x.price * x.qty})
 * Architecture
 
 #+begin_src
-jbq 'items | where .price > 100 | map {name, price}' data.json
+jbq '.items | where .price > 100 | map {name, price}' data.json
 
   ┌────────┐    ┌────────┐    ┌─────┐    ┌─────────────┐    ┌────────┐
   │ Lexer  │ -> │ Parser │ -> │ AST │ -> │ Interpreter │ -> │ Output │
@@ -227,7 +227,7 @@ jbq/
 - [ ] Token types: dot, pipe, ident, int, float, string, brackets, braces, operators
 - [ ] AST types: Identity, Field, Index, Pipe, FnCall, Object, Array, Literal, BinOp, If, Let
 - [ ] Recursive descent parser
-- [ ] Parse =items | where .price > 100 | map {name, price}=
+- [ ] Parse =.items | where .price > 100 | map {name, price}=
 
 ** Phase 3: Interpreter (eager first) [0/4]
 - [ ] Eval AST against JSON values

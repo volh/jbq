@@ -9,7 +9,7 @@ Not "jq in Rust" or "jq in Go" — a new language that's readable, concise, and 
 .items[] | select(.price > 100) | {name, display: (.name | ascii_downcase | .[0:20])}
 
 # jbq
-items | where .price > 100 | map {name, display: .name | lower | truncate 20}
+.items | where .price > 100 | map {name, display: .name | lower | truncate 20}
 ```
 
 ## Install
@@ -19,8 +19,30 @@ Requires:
 - opam
 - a system simdjson installation (headers + shared library)
 
+Install simdjson with your system package manager first. For example:
+
 ```bash
-opam install . --deps-only --with-test -y
+# Arch/CachyOS
+sudo pacman -S simdjson
+
+# Debian/Ubuntu
+sudo apt install libsimdjson-dev
+
+# macOS
+brew install simdjson
+```
+
+Then create a local opam switch with the project dependencies and build:
+
+```bash
+make init
+make build
+```
+
+If you already have a suitable local switch, use:
+
+```bash
+make install-deps
 make build
 ```
 
@@ -30,7 +52,7 @@ The binary lands at `_build/default/bin/main.exe`. Copy or symlink it as `jbq`.
 
 ```bash
 # Read from file
-jbq 'items | where .price > 100' data.json
+jbq '.items | where .price > 100' data.json
 
 # Read from stdin
 curl -s api.example.com/data | jbq '.users | map {name, email}'
@@ -166,13 +188,13 @@ let total = .price * .qty in {name, total}
 ### Lambdas
 
 ```
-items | map (x => {name: x.name, total: x.price * x.qty})
+.items | map (x => {name: x.name, total: x.price * x.qty})
 ```
 
 ### String interpolation
 
 ```
-`Hello, ${.name}!`
+"Hello, ${.name}!"
 ```
 
 ## Built-in Functions
@@ -244,7 +266,7 @@ items | map (x => {name: x.name, total: x.price * x.qty})
 
 |                   | jq                                      | jbq                                                            |
 |-------------------|-----------------------------------------|----------------------------------------------------------------|
-| **Iteration**     | Explicit: `.items[]`                    | Implicit: `items` (collection functions iterate automatically) |
+| **Iteration**     | Explicit: `.items[]`                    | `.items` selects the array; collection functions iterate it |
 | **Filter**        | `select(.price > 100)`                  | `where .price > 100`                                          |
 | **Transform**     | `map(.name)` or `.[] \| .name`          | `map .name`                                                    |
 | **Object build**  | `{name: .name, price: .price}`          | `{name, price}` (punning)                                      |
@@ -280,7 +302,7 @@ Chained collection operations (`where`, `map`, `take`, `skip`, `unique`, `flatte
 
 ```bash
 # This is a single pass, not three:
-items | where .price > 100 | map .name | take 5
+.items | where .price > 100 | map .name | take 5
 ```
 
 A transducer is a step function `(accumulator, item) -> (accumulator, signal)` where the signal is either `continue` or `done`. Composition chains these steps — `filter` wraps `map` wraps `take` — so each element flows through the full pipeline before the next one enters.

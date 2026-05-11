@@ -79,9 +79,9 @@ These keep their current meaning:
 Examples:
 
 #+begin_src
-items | map .name
-items | flatmap .orders
-items | where .active
+.items | map .name
+.items | flatmap .orders
+.items | where .active
 #+end_src
 
 ** Explicit Traversal

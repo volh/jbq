@@ -1,3 +1,9 @@
 (test
  (name test_jbq)
  (libraries jbq alcotest))
+
+(rule
+ (alias runtest)
+ (deps smoke.sh)
+ (action
+  (run bash %{deps} %{exe:../bin/main.exe})))

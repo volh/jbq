@@ -17,7 +17,8 @@ input path that materially changes the performance profile.
 =~/dev/sandbox/jbq/=
 
 ** Status
-Working prototype. 82/82 tests passing. CLI functional.
+Working prototype. CLI functional. 163/164 Alcotest cases pass; one known
+parser-related failure remains (=slice sees let binding=).
 
 Current parser/runtime state:
 - simdjson is the default JSON input path
@@ -34,7 +35,7 @@ Current parser/runtime state:
 * Architecture
 
 #+begin_src
-jbq 'items | where .price > 100 | map {name, price}' data.json
+jbq '.items | where .price > 100 | map {name, price}' data.json
 
   ┌────────────┐    ┌────────┐    ┌─────┐    ┌─────────────┐    ┌────────┐
   │ simdjson   │ -> │ Parser │ -> │ AST │ -> │ Interpreter │ -> │ Output │
@@ -200,7 +201,6 @@ The test suite now includes:
 - Top-level array streaming is query-shape dependent, not universal
 - Identity still slightly trails jq
 - Build currently assumes a system simdjson installation
-- =split= still only supports single-character separators
 - No parenthesized/comma call syntax yet
 
 * Dependencies

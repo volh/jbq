@@ -19,7 +19,7 @@ Raw artifacts are stored under:
   Verdict: *false*.
 
 - Claim: the experimental CLI input path no longer uses Yojson when
-  =JX_EXPERIMENTAL_SIMDJSON_TOP_ARRAY=1= is enabled.
+  the experimental top-array mode is enabled.
   Verdict: *true*, based on code and profile output.
 
 - Claim: the branch meaningfully improves the targeted workloads over =jbq main=.
@@ -98,7 +98,7 @@ Conclusion:
 Command:
 
 #+begin_src shell
-JBQ_PROFILE=1 env JX_EXPERIMENTAL_SIMDJSON_TOP_ARRAY=1 \
+JBQ_PROFILE=1 \
   _build/default/bin/main.exe '.name' /tmp/jbq-small-object.json
 #+end_src
 
@@ -127,7 +127,7 @@ This verifies that the branch can take the full =simdjson parse= path with no
 Command:
 
 #+begin_src shell
-JBQ_PROFILE=1 env JX_EXPERIMENTAL_SIMDJSON_TOP_ARRAY=1 \
+JBQ_PROFILE=1 \
   _build/default/bin/main.exe 'where .price > 400 | take 5' bench/data/xlarge.json
 #+end_src
 
@@ -313,7 +313,7 @@ Interpretation:
   It was not.
 
 - It *is* correct to say that the experimental CLI input path on this branch,
-  with =JX_EXPERIMENTAL_SIMDJSON_TOP_ARRAY=1= enabled, no longer uses Yojson
+  with experimental top-array mode enabled, no longer uses Yojson
   for input parsing.
 
 - It *is* correct to say that on the tested commands, this branch beats both

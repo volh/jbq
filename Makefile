@@ -1,4 +1,5 @@
 DUNE = opam exec -- dune
+OCAML_COMPILER = ocaml-base-compiler.5.4.1
 
 .PHONY: build
 build:
@@ -20,9 +21,16 @@ dev:
 clean:
 	$(DUNE) clean
 
+.PHONY: create-switch
+create-switch:
+	opam switch create . $(OCAML_COMPILER) --deps-only --with-test -y
+
 .PHONY: install-deps
 install-deps:
 	opam install . --deps-only --with-test -y
+
+.PHONY: init
+init: create-switch build
 
 .PHONY: fmt
 fmt:
