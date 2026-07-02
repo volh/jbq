@@ -12,13 +12,13 @@
 (authors "Roman Sever")
 
 (source
- (uri "https://github.com/romansever/jbq"))
+ (uri "https://github.com/volh/jbq"))
 
 (package
  (name jbq)
- (synopsis "A better query language for JSON")
+ (synopsis "JSON query and schema inference CLI")
  (description
-  "jbq (JSON Bourne Query) is a jq replacement with a genuinely better query language. Readable, concise, unambiguous. Not jq-in-another-language — a new language for JSON.")
+  "jbq (JSON Bourne Query) is a JSON query CLI with a compact, explicit language for filtering, reshaping, inspecting JSON, and inferring JSON Schema.")
  (depends
   (ocaml (>= 5.4.0))
   (dune (>= 3.17))

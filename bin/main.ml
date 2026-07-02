@@ -164,7 +164,7 @@ let no_enum =
   Arg.(value & flag & info [ "no-enum" ] ~doc)
 
 let cmd =
-  let doc = "A better query language for JSON" in
+  let doc = "Query JSON and infer JSON Schema" in
   let info = Cmd.info "jbq" ~version:"0.1.0" ~doc in
   Cmd.v info
     Term.(const run $ query $ input_file $ file_opt $ raw_output $ compact $ schema $ sample $ no_const $ no_enum)
